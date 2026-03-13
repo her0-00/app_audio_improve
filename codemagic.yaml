@@ -2,16 +2,35 @@ workflows:
   ios-workflow:
     name: Cinema Audio Luxe iOS
     max_build_duration: 60
+    instance_type: mac_mini_m1
     environment:
       flutter: stable
       xcode: latest
       cocoapods: default
+      ios_signing:
+        distribution_type: development
+        bundle_identifier: com.cinemaaudioluxe.app
     scripts:
-      - name: Install dependencies
+      - name: Set up code signing settings on Xcode project
         script: |
-          flutter pub get
-      - name: Build iOS
+          xcode-project use-profiles
+      - name: Get Flutter packages
         script: |
-          flutter build ios --release --no-codesign
+          flutter packages pub get
+      - name: Install pods
+        script: |
+          find . -name "Podfile" -execdir pod install \;
+      - name: Flutter build ipa
+        script: |
+          flutter build ipa --release --export-options-plist=/Users/builder/export_options.plist
     artifacts:
-      - build/ios/iphoneos/*.app
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+      - flutter_drive.log
+    publishing:
+      email:
+        recipients:
+          - user@example.com
+        notify:
+          success: true
+          failure: true
