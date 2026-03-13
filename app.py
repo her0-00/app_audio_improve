@@ -52,7 +52,7 @@ def search_youtube(query):
                 })
     return results
 
-    def process_download(url, title):
+def process_download(url, title):
     safe_title = clean_filename(title)
     file_path_template = f'{SERVER_VAULT}/{safe_title}.%(ext)s'
     
