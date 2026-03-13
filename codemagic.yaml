@@ -9,6 +9,8 @@ workflows:
     scripts:
       - name: Install dependencies
         script: flutter pub get
+      - name: Flutter precache iOS
+        script: flutter precache --ios
       - name: Install CocoaPods
         script: |
           cd ios
