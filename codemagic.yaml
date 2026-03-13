@@ -9,11 +9,12 @@ workflows:
     scripts:
       - name: Install dependencies
         script: flutter pub get
-      - name: Flutter precache iOS
-        script: flutter precache --ios
+      - name: Flutter clean
+        script: flutter clean
       - name: Install CocoaPods
         script: |
           cd ios
+          rm -rf Pods Podfile.lock
           pod install
           cd ..
       - name: Build iOS app (no signing)

@@ -1,9 +1,8 @@
-import Flutter
 import UIKit
+import Flutter
 import AVFoundation
-import Accelerate
 
-@UIApplicationMain
+@main
 @objc class AppDelegate: FlutterAppDelegate {
     private var audioEngine: CinemaAudioEngine?
     
@@ -90,7 +89,6 @@ class CinemaAudioEngine {
         engine.attach(compressor)
         engine.attach(limiter)
         
-        // EQ Setup: Sub-bass (40Hz), Mid (1kHz), High (8kHz)
         eq.bands[0].frequency = 40
         eq.bands[0].bandwidth = 1.0
         eq.bands[0].gain = 0
@@ -109,11 +107,9 @@ class CinemaAudioEngine {
         eq.bands[2].filterType = .parametric
         eq.bands[2].bypass = false
         
-        // Reverb: Large Hall
         reverb.loadFactoryPreset(.largeHall)
         reverb.wetDryMix = reverbMix * 100
         
-        // Chain: Player → EQ → Reverb → Compressor → Limiter → Output
         engine.connect(player, to: eq, format: nil)
         engine.connect(eq, to: reverb, format: nil)
         engine.connect(reverb, to: compressor, format: nil)
