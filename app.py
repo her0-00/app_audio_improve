@@ -52,7 +52,7 @@ def search_youtube(query):
                 })
     return results
 
-def process_download(url, title):
+    def process_download(url, title):
     safe_title = clean_filename(title)
     file_path_template = f'{SERVER_VAULT}/{safe_title}.%(ext)s'
     
@@ -60,18 +60,19 @@ def process_download(url, title):
         'format': 'bestaudio/best',
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'flac', # C'est ici que la magie FLAC opère
+            'preferredcodec': 'flac',
             'preferredquality': '0',
         }],
         'outtmpl': file_path_template,
         'quiet': True,
+        # --- LA LIGNE MAGIQUE ANTI-BLOCAGE ---
+        'extractor_args': {'youtube': {'player_client': ['android']}},
     }
     
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
     
     return f"{SERVER_VAULT}/{safe_title}.flac", f"{safe_title}.flac"
-
 # --- INTERFACE VISUELLE ---
 st.markdown("<h1>🎵<br>STUDIO CINÉMA</h1>", unsafe_allow_html=True)
 st.markdown("<p style='text-align: center; color: #9E9E9E; font-size: 12px; letter-spacing: 4px;'>ULTRA LOSSLESS EXTRACTION</p>", unsafe_allow_html=True)
