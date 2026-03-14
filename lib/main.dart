@@ -11,18 +11,42 @@ import 'models.dart';
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // Logger interne pour afficher les erreurs sur l'appareil (sans console)
+  AppLogger.init();
+
   // Capture des erreurs non gérées pour éviter les plantages brutaux.
   FlutterError.onError = (details) {
     FlutterError.presentError(details);
-    debugPrint('Unhandled Flutter error: ${details.exception}');
+    AppLogger.log('Unhandled Flutter error: ${details.exception}');
   };
 
   runZonedGuarded(() {
     runApp(const CinemaAudioLuxeApp());
   }, (error, stack) {
-    debugPrint('Unhandled zone error: $error');
-    debugPrint('$stack');
+    AppLogger.log('Unhandled zone error: $error');
+    AppLogger.log(stack.toString());
   });
+}
+
+/// Logger en mémoire pour visualiser les erreurs directement dans l'app.
+class AppLogger {
+  static final List<String> _logs = [];
+
+  static void init() {
+    _logs.clear();
+    log('--- AppLogger initialized');
+  }
+
+  static void log(String message) {
+    final timestamp = DateTime.now().toIso8601String();
+    final entry = '[$timestamp] $message';
+    _logs.add(entry);
+    if (_logs.length > 200) _logs.removeAt(0);
+    debugPrint(entry);
+  }
+
+  static List<String> get logs => List.unmodifiable(_logs);
+  static void clear() => _logs.clear();
 }
 
 
@@ -769,6 +793,15 @@ class _MainShellState extends State<MainShell> {
     ];
     return Scaffold(
       body: pages[_tab],
+      floatingActionButton: FloatingActionButton(
+        backgroundColor: _gold,
+        child: const Icon(Icons.bug_report),
+        tooltip: 'Afficher le journal de debug',
+        onPressed: () {
+          Navigator.of(context).push(MaterialPageRoute(builder: (_) => const DebugLogScreen()));
+        },
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       bottomNavigationBar: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1811,6 +1844,65 @@ class _GoldButton extends StatelessWidget {
       ),
       child: Text(label,
           style: const TextStyle(fontSize: 14, letterSpacing: 2, fontWeight: FontWeight.w600)),
+    );
+  }
+}
+
+// ─── Écran de logs intégré (accessible via le bouton "bug" en bas à droite)
+class DebugLogScreen extends StatelessWidget {
+  const DebugLogScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final logs = AppLogger.logs.reversed.toList();
+    return Scaffold(
+      backgroundColor: _dark,
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF0D0D0D),
+        title: const Text('Journal de debug'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.copy),
+            tooltip: 'Copier dans le presse-papiers',
+            onPressed: () {
+              final text = logs.join('\n');
+              Clipboard.setData(ClipboardData(text: text));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Logs copiés dans le presse-papiers')),
+              );
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete),
+            tooltip: 'Effacer le journal',
+            onPressed: () {
+              AppLogger.clear();
+              Navigator.of(context).pop();
+            },
+          ),
+        ],
+      ),
+      body: Container(
+        color: const Color(0xFF101010),
+        child: logs.isEmpty
+            ? const Center(
+                child: Text('Aucun log disponible',
+                    style: TextStyle(color: Colors.white54, fontSize: 14)),
+              )
+            : ListView.builder(
+                padding: const EdgeInsets.all(12),
+                itemCount: logs.length,
+                itemBuilder: (_, i) {
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Text(
+                      logs[i],
+                      style: const TextStyle(color: Colors.white70, fontSize: 12),
+                    ),
+                  );
+                },
+              ),
+      ),
     );
   }
 }
