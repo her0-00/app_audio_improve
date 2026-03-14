@@ -23,7 +23,7 @@ class AudioState extends ChangeNotifier {
   AudioTrack? get current => _library.currentTrack;
   bool isPlaying = false;
   double position = 0;
-  double get duration => (current?.duration ?? 0) > 0 ? current!.duration : 1.0;
+  double get duration => current?.duration ?? 0.0;
   Timer? _posTimer;
   Timer? _spectrumTimer;
   bool _isUserSeeking = false; // Flag to prevent timer interference during seeking
@@ -730,6 +730,7 @@ const _gold = Color(0xFFD4AF37);
 const _dark = Color(0xFF111111);
 
 String _fmt(double s) {
+  if (s <= 0) return '--:--';
   final m = s ~/ 60;
   final sec = s.toInt() % 60;
   return '${m.toString().padLeft(2, '0')}:${sec.toString().padLeft(2, '0')}';
@@ -1073,8 +1074,8 @@ class PlayerScreen extends StatelessWidget {
                     child: Column(
                       children: [
                         Slider(
-                          value: _audio.position.clamp(0.0, _audio.duration),
-                          max: _audio.duration,
+                          value: _audio.position.clamp(0.0, _audio.duration > 0 ? _audio.duration : 1.0),
+                          max: _audio.duration > 0 ? _audio.duration : 1.0,
                           min: 0.0,
                           onChangeStart: (_) {
                             _audio._isUserSeeking = true;
@@ -1096,7 +1097,7 @@ class PlayerScreen extends StatelessWidget {
                           children: [
                             Text(_fmt(_audio.position),
                                 style: const TextStyle(color: Colors.white54, fontSize: 11)),
-                            Text(_fmt(_audio.duration),
+                            Text(_audio.duration > 0 ? _fmt(_audio.duration) : '--:--',
                                 style: const TextStyle(color: Colors.white54, fontSize: 11)),
                           ],
                         ),
