@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:async';
 import 'dart:io';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'audio_library.dart';
 import 'models.dart';
 
@@ -22,9 +23,10 @@ class AudioState extends ChangeNotifier {
   AudioTrack? get current => _library.currentTrack;
   bool isPlaying = false;
   double position = 0;
-  double get duration => (current?.duration ?? 0) > 0 ? current!.duration : 1;
+  double get duration => (current?.duration ?? 0) > 0 ? current!.duration : 1.0;
   Timer? _posTimer;
   Timer? _spectrumTimer;
+  bool _isUserSeeking = false; // Flag to prevent timer interference during seeking
 
   String currentPreset = 'cinema';
   bool shuffleEnabled = false;
@@ -42,6 +44,29 @@ class AudioState extends ChangeNotifier {
     _library.loadLibrary();
     _startSpectrumTimer();
     refreshOutputDevices();
+    _syncInitialState();
+  }
+
+  Future<void> _syncInitialState() async {
+    try {
+      // Synchroniser l'index actuel avec le code natif
+      final nativeIndex = await _ch.invokeMethod<int>('getCurrentIndex') ?? 0;
+      if (nativeIndex >= 0 && nativeIndex < queue.length) {
+        _library.jumpTo(nativeIndex);
+      }
+
+      // Synchroniser l'état de lecture
+      final isPlayingNative = await _ch.invokeMethod<bool>('isPlaying') ?? false;
+      isPlaying = isPlayingNative;
+
+      // Synchroniser la position
+      final nativePosition = await _ch.invokeMethod<double>('getPosition') ?? 0.0;
+      position = nativePosition;
+
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Error syncing initial state: $e');
+    }
   }
 
   void _startSpectrumTimer() {
@@ -60,6 +85,12 @@ class AudioState extends ChangeNotifier {
   Future<void> _onNativeCall(MethodCall call) async {
     switch (call.method) {
       case 'onTrackChanged':
+        if (call.arguments is Map) {
+          final newIndex = (call.arguments as Map)['index'] as int?;
+          if (newIndex != null && newIndex >= 0 && newIndex < queue.length) {
+            _library.jumpTo(newIndex);
+          }
+        }
         position = 0;
         isPlaying = true;
         notifyListeners();
@@ -336,13 +367,20 @@ class AudioState extends ChangeNotifier {
   Future<void> togglePlay() async => isPlaying ? pause() : play();
 
   Future<void> seek(double pos) async {
+    _isUserSeeking = true; // Prevent timer from overriding during seek
     try {
-      await _ch.invokeMethod('seek', {'position': pos});
-      position = pos;
+      final clampedPos = pos.clamp(0.0, duration);
+      await _ch.invokeMethod('seek', {'position': clampedPos});
+      position = clampedPos;
+      notifyListeners();
     } catch (e) {
       debugPrint('seek error: $e');
+    } finally {
+      // Reset the flag after a short delay to allow timer updates again
+      Future.delayed(const Duration(milliseconds: 500), () {
+        _isUserSeeking = false;
+      });
     }
-    notifyListeners();
   }
 
   Future<void> next() async {
@@ -437,7 +475,7 @@ class AudioState extends ChangeNotifier {
   void _startTimer() {
     _posTimer?.cancel();
     _posTimer = Timer.periodic(const Duration(milliseconds: 300), (_) async {
-      if (!isPlaying) return;
+      if (!isPlaying || _isUserSeeking) return; // Don't update if user is seeking
       try {
         final pos = await _ch.invokeMethod<double>('getPosition') ?? position;
         position = pos.clamp(0.0, duration);
@@ -834,8 +872,22 @@ class PlayerScreen extends StatelessWidget {
                       children: [
                         Slider(
                           value: _audio.position.clamp(0.0, _audio.duration),
-                          max: _audio.duration > 0 ? _audio.duration : 1.0,
-                          onChanged: _audio.seek,
+                          max: _audio.duration,
+                          min: 0.0,
+                          onChangeStart: (_) {
+                            _audio._isUserSeeking = true;
+                          },
+                          onChangeEnd: (_) {
+                            Future.delayed(const Duration(milliseconds: 500), () {
+                              _audio._isUserSeeking = false;
+                            });
+                          },
+                          onChanged: (value) {
+                            // Update position immediately for visual feedback
+                            _audio.position = value.clamp(0.0, _audio.duration);
+                            // Seek to the position (seek method handles notifyListeners)
+                            _audio.seek(value);
+                          },
                         ),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1071,6 +1123,178 @@ class _MixingConsoleScreenState extends State<MixingConsoleScreen> {
     'compress': 0.5,
   };
 
+  // Configuration par défaut
+  final Map<String, double> _defaultConfig = {
+    'reverb':   0.25,
+    'bass':     0.0,
+    'volume':   0.0,
+    'delay':    0.15,
+    'warmth':   0.05,
+    'clarity':  0.0,
+    'presence': 0.0,
+    'pitch':    0.5,
+    'crossfeed': 0.0,
+    'exciter':  0.0,
+    'compress': 0.5,
+  };
+
+  List<String> _savedPresets = [];
+  String? _currentPresetName;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSavedPresets();
+  }
+
+  Future<void> _loadSavedPresets() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final presets = prefs.getStringList('custom_presets') ?? [];
+      setState(() {
+        _savedPresets = presets;
+      });
+    } catch (e) {
+      debugPrint('Error loading presets: $e');
+      setState(() {});
+    }
+  }
+
+  Future<void> _savePreset(String name) async {
+    if (name.isEmpty) return;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final presetData = _fx.entries.map((e) => '${e.key}:${e.value}').join(',');
+      await prefs.setString('preset_$name', presetData);
+
+      if (!_savedPresets.contains(name)) {
+        _savedPresets.add(name);
+        await prefs.setStringList('custom_presets', _savedPresets);
+      }
+
+      setState(() => _currentPresetName = name);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Configuration "$name" sauvegardée'),
+            backgroundColor: const Color(0xFF2E7D32),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error saving preset: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Erreur lors de la sauvegarde'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _loadPreset(String name) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final presetData = prefs.getString('preset_$name');
+      if (presetData == null) return;
+
+      final newFx = Map<String, double>.from(_fx);
+      final entries = presetData.split(',');
+      for (final entry in entries) {
+        final parts = entry.split(':');
+        if (parts.length == 2) {
+          final key = parts[0];
+          final value = double.tryParse(parts[1]) ?? 0.0;
+          if (newFx.containsKey(key)) {
+            newFx[key] = value;
+          }
+        }
+      }
+
+      // Appliquer la configuration
+      for (final entry in newFx.entries) {
+        await _ch.invokeMethod('setEffect', {'effect': entry.key, 'value': entry.value});
+      }
+
+      setState(() {
+        _fx.clear();
+        _fx.addAll(newFx);
+        _currentPresetName = name;
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Configuration "$name" chargée'),
+            backgroundColor: const Color(0xFF1565C0),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error loading preset: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Erreur lors du chargement'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _deletePreset(String name) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('preset_$name');
+      _savedPresets.remove(name);
+      await prefs.setStringList('custom_presets', _savedPresets);
+
+      if (_currentPresetName == name) {
+        setState(() => _currentPresetName = null);
+      }
+
+      setState(() {});
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Configuration "$name" supprimée'),
+            backgroundColor: const Color(0xFFEF6C00),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error deleting preset: $e');
+    }
+  }
+
+  Future<void> _resetToDefault() async {
+    // Appliquer la configuration par défaut
+    for (final entry in _defaultConfig.entries) {
+      await _ch.invokeMethod('setEffect', {'effect': entry.key, 'value': entry.value});
+    }
+
+    setState(() {
+      _fx.clear();
+      _fx.addAll(_defaultConfig);
+      _currentPresetName = null;
+    });
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Configuration par défaut restaurée'),
+          backgroundColor: Color(0xFF424242),
+        ),
+      );
+    }
+  }
+
   Future<void> _set(String key, double v) async {
     setState(() => _fx[key] = v);
     try {
@@ -1094,6 +1318,65 @@ class _MixingConsoleScreenState extends State<MixingConsoleScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Section de gestion des presets
+            _sectionLabel('💾 CONFIGURATIONS'),
+            if (_currentPresetName != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  'Actuel: $_currentPresetName',
+                  style: const TextStyle(color: _gold, fontSize: 12),
+                ),
+              ),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: () async {
+                      final name = await _showPresetNameDialog(context, 'Sauvegarder la configuration');
+                      if (name != null) {
+                        await _savePreset(name);
+                      }
+                    },
+                    icon: const Icon(Icons.save, size: 16),
+                    label: const Text('SAUVEGARDER'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _gold,
+                      foregroundColor: Colors.black,
+                      textStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _resetToDefault,
+                    icon: const Icon(Icons.restore, size: 16),
+                    label: const Text('DÉFAUT'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF424242),
+                      foregroundColor: Colors.white,
+                      textStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            if (_savedPresets.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              const Text(
+                'Configurations sauvegardées:',
+                style: TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+              const SizedBox(height: 4),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: _savedPresets.map((preset) => _presetChip(preset)).toList(),
+              ),
+            ],
             _sectionLabel('🎬 PATHÉ PALACE · DOLBY ATMOS'),
             _slider('🌊 IMMERSION (REVERB)', 'reverb', '%'),
             _slider('🔊 SUB-BASS (32–125 Hz)', 'bass', '%'),
@@ -1113,6 +1396,92 @@ class _MixingConsoleScreenState extends State<MixingConsoleScreen> {
         ),
       ),
     );
+  }
+
+  Widget _presetChip(String presetName) {
+    final isCurrent = _currentPresetName == presetName;
+    return GestureDetector(
+      onTap: () => _loadPreset(presetName),
+      onLongPress: () => _showDeletePresetDialog(context, presetName),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: isCurrent ? _gold : const Color(0xFF424242),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _gold, width: 1),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              presetName,
+              style: TextStyle(
+                color: isCurrent ? Colors.black : Colors.white,
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            if (isCurrent) ...[
+              const SizedBox(width: 4),
+              Icon(Icons.check, size: 12, color: Colors.black),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<String?> _showPresetNameDialog(BuildContext context, String title) async {
+    String name = '';
+    return showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: TextField(
+          onChanged: (value) => name = value,
+          decoration: const InputDecoration(
+            hintText: 'Nom de la configuration',
+            border: OutlineInputBorder(),
+          ),
+          maxLength: 20,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('ANNULER'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, name.trim()),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showDeletePresetDialog(BuildContext context, String presetName) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Supprimer la configuration?'),
+        content: Text('Voulez-vous supprimer "$presetName"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('ANNULER'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('SUPPRIMER'),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      await _deletePreset(presetName);
+    }
   }
 
   Widget _sectionLabel(String label) => Padding(

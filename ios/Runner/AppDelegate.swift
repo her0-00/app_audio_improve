@@ -109,6 +109,10 @@ import Accelerate
            let profile = args["profile"] as? String {
           self.bindDeviceProfile(name: name, profile: profile); result(nil)
         }
+      case "getCurrentIndex":
+        result(self.currentIndex)
+      case "isPlaying":
+        result(self.isPlaying)
       case "openURL":
         if let args = call.arguments as? [String: Any],
            let urlString = args["url"] as? String,
