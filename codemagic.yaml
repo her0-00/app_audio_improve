@@ -4,8 +4,12 @@ workflows:
     max_build_duration: 90
     environment:
       flutter: stable
-      xcode: 15.0
+      xcode: latest
       cocoapods: default
+    # Alternatives si latest ne fonctionne pas :
+    # xcode: 15.2
+    # xcode: 15.3
+    # xcode: 15.4
     
     scripts:
       - name: Environment info
@@ -14,6 +18,12 @@ workflows:
           flutter --version
           xcodebuild -version
           pod --version
+          echo "Available Xcode versions:"
+          ls /Applications/ | grep Xcode || echo "Xcode not found in /Applications/"
+          echo "Flutter doctor:"
+          flutter doctor -v
+          echo "iOS specific check:"
+          flutter doctor --ios || echo "iOS check failed"
           echo "=================="
       
       - name: Get Flutter packages
@@ -41,6 +51,9 @@ workflows:
         script: |
           set -e
           echo "Starting iOS build..."
+          echo "Checking Flutter iOS compatibility..."
+          flutter doctor --ios || echo "iOS doctor check completed"
+          echo "Building iOS app..."
           flutter build ios --release --no-codesign --no-tree-shake-icons
           echo "Build completed successfully"
           ls -la build/ios/iphoneos/
