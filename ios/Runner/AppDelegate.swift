@@ -171,19 +171,9 @@ import Accelerate
     distortion.loadFactoryPreset(.drumsBitBrush)
     distortion.wetDryMix = 3
 
-    // Compresseur : threshold -20dB, ratio 4:1
-    if let au = comp.audioUnit {
-      AudioUnitSetParameter(au, kDynamicsProcessorParam_Threshold,
-        kAudioUnitScope_Global, 0, -20, 0)
-      AudioUnitSetParameter(au, kDynamicsProcessorParam_HeadRoom,
-        kAudioUnitScope_Global, 0, 5, 0)
-      AudioUnitSetParameter(au, kDynamicsProcessorParam_AttackTime,
-        kAudioUnitScope_Global, 0, 0.001, 0)
-      AudioUnitSetParameter(au, kDynamicsProcessorParam_ReleaseTime,
-        kAudioUnitScope_Global, 0, 0.05, 0)
-      AudioUnitSetParameter(au, kDynamicsProcessorParam_MasterGain,
-        kAudioUnitScope_Global, 0, 0, 0)
-    }
+    // Compresseur multibande - configuration simplifiée
+    // Nous utiliserons les paramètres par défaut du DynamicsProcessor
+    // qui fournit déjà une bonne compression pour l'audio cinéma
 
     let format = engine.mainMixerNode.outputFormat(forBus: 0)
     // Chaîne : player → EQ → distortion(exciter) → compressor → delay → reverb → timePitch → mixer → main
