@@ -568,13 +568,29 @@ class ImportScreen extends StatelessWidget {
                 _GoldButton(
                   label: '+ AJOUTER DES FICHIERS',
                   onPressed: () async {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Ouverture du sélecteur...'),
+                        duration: Duration(seconds: 1),
+                        backgroundColor: Color(0xFF1A1A1A),
+                      ),
+                    );
                     await _audio.addFiles();
                     if (!context.mounted) return;
                     if (_audio.queue.isNotEmpty) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
-                          content: Text('${_audio.queue.length} piste(s) dans la file'),
-                          backgroundColor: const Color(0xFF1A1A1A),
+                          content: Text('✅ ${_audio.queue.length} piste(s) ajoutée(s)'),
+                          backgroundColor: Colors.green.shade800,
+                          duration: const Duration(seconds: 3),
+                        ),
+                      );
+                    } else {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('❌ Aucun fichier importé. Vérifiez les permissions.'),
+                          backgroundColor: Colors.red,
+                          duration: Duration(seconds: 4),
                         ),
                       );
                     }
@@ -583,10 +599,18 @@ class ImportScreen extends StatelessWidget {
                 const SizedBox(height: 16),
                 ListenableBuilder(
                   listenable: _audio,
-                  builder: (_, __) => _audio.queue.isNotEmpty
-                      ? Text('${_audio.queue.length} piste(s) chargée(s)',
-                          style: const TextStyle(color: Colors.white54, fontSize: 13))
-                      : const SizedBox.shrink(),
+                  builder: (_, __) => Column(
+                    children: [
+                      if (_audio.queue.isNotEmpty)
+                        Text('${_audio.queue.length} piste(s) chargée(s)',
+                            style: const TextStyle(color: Colors.white54, fontSize: 13)),
+                      if (_audio.queue.isNotEmpty)
+                        const SizedBox(height: 8),
+                      if (_audio.queue.isNotEmpty)
+                        Text('🎵 Allez dans "File" pour voir la liste',
+                            style: const TextStyle(color: _gold, fontSize: 11)),
+                    ],
+                  ),
                 ),
               ],
             ),
