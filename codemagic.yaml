@@ -1,45 +1,82 @@
 workflows:
   ios-build:
     name: Cinema Audio Luxe iOS Build
+    max_build_duration: 90
     environment:
       flutter: stable
-      xcode: latest
+      xcode: 15.0
       cocoapods: default
+    
     scripts:
-      - name: Deep clean
+      - name: Environment info
+        script: |
+          echo "=== Environment ==="
+          flutter --version
+          xcodebuild -version
+          pod --version
+          echo "=================="
+      
+      - name: Get Flutter packages
+        script: |
+          flutter pub get
+      
+      - name: Deep clean iOS
         script: |
           flutter clean
-          rm -rf ios/Pods ios/Podfile.lock ios/.symlinks
-      - name: Install dependencies
-        script: flutter pub get
-      - name: Update CocoaPods repo
-        script: pod repo update
-      - name: Install CocoaPods
+          cd ios
+          rm -rf Pods Podfile.lock .symlinks/ Flutter/Flutter.framework
+          cd ..
+      
+      - name: Install CocoaPods dependencies
         script: |
           cd ios
-          pod deintegrate || true
-          pod install --repo-update --verbose
+          pod install --repo-update
           cd ..
+      
+      - name: Flutter analyze
+        script: |
+          flutter analyze --no-fatal-infos || echo "Analysis warnings found (non-blocking)"
+      
       - name: Build iOS app (no signing)
         script: |
-          flutter build ios --release --no-codesign --verbose
+          set -e
+          echo "Starting iOS build..."
+          flutter build ios --release --no-codesign --no-tree-shake-icons
+          echo "Build completed successfully"
+          ls -la build/ios/iphoneos/
+      
       - name: Package .ipa manually
         script: |
           set -e
+          echo "Creating IPA package..."
           mkdir -p Payload
-          APP_PATH=$(ls -d build/ios/iphoneos/*.app 2>/dev/null | head -n 1)
+          
+          # Trouver le fichier .app
+          APP_PATH=$(find build/ios/iphoneos -name "*.app" -type d | head -n 1)
+          
           if [ -z "$APP_PATH" ]; then
-            echo "ERROR: No .app bundle found in build/ios/iphoneos. Listing directory contents:"
-            ls -la build/ios/iphoneos || true
+            echo "ERROR: No .app bundle found"
+            ls -la build/ios/iphoneos/
             exit 1
           fi
+          
           echo "Found app bundle: $APP_PATH"
           cp -r "$APP_PATH" Payload/
+          
+          # Créer l'IPA
           zip -r CinemaAudioLuxe.ipa Payload
+          
+          # Déplacer dans le dossier artifacts
           mkdir -p build/ios/ipa
           mv CinemaAudioLuxe.ipa build/ios/ipa/
+          
+          echo "IPA created successfully"
+          ls -lh build/ios/ipa/
+    
     artifacts:
       - build/ios/ipa/*.ipa
+      - build/ios/iphoneos/*.app
+    
     publishing:
       email:
         recipients:
