@@ -4,7 +4,6 @@ import AVFoundation
 import MediaPlayer
 import Accelerate
 
-@main
 @objc class AppDelegate: FlutterAppDelegate {
   private var audioEngine: AVAudioEngine?
   private var player: AVAudioPlayerNode?
@@ -23,15 +22,13 @@ import Accelerate
   private var lastSeekTime: Double = 0
   private var channel: FlutterMethodChannel?
 
-  // Playlist / shuffle / repeat
   private var playlist: [String] = []
   private var currentIndex: Int = 0
   private var shuffleEnabled = false
-  private var repeatMode = 0 // 0=off, 1=all, 2=one
+  private var repeatMode = 0
   private var shuffledIndices: [Int] = []
   private var shufflePosition: Int = 0
 
-  // Profil EQ actif
   private var currentEQProfile = "default"
   private var currentPreset = "cinema"
 
@@ -43,7 +40,10 @@ import Accelerate
       return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
 
-    let ch = FlutterMethodChannel(name: "cinema.audio.luxe/audio", binaryMessenger: controller.binaryMessenger)
+    let ch = FlutterMethodChannel(
+      name: "cinema.audio.luxe/audio",
+      binaryMessenger: controller.binaryMessenger
+    )
     self.channel = ch
 
     ch.setMethodCallHandler { [weak self] (call, result) in
@@ -93,6 +93,13 @@ import Accelerate
         }
       case "getAudioDevice":
         result(self.getCurrentAudioDevice())
+      case "bindDeviceProfile":
+        // Appelé depuis Flutter quand l'utilisateur associe un profil à un appareil renommé
+        if let args = call.arguments as? [String: Any],
+           let name = args["name"] as? String,
+           let profile = args["profile"] as? String {
+          self.bindDeviceProfile(name: name, profile: profile); result(nil)
+        }
       case "openURL":
         if let args = call.arguments as? [String: Any],
            let urlString = args["url"] as? String,
@@ -113,8 +120,10 @@ import Accelerate
   private func configureAudioSession() {
     let session = AVAudioSession.sharedInstance()
     do {
-      try session.setCategory(.playback, mode: .default,
-        options: [.allowBluetoothA2DP, .allowAirPlay])
+      try session.setCategory(
+        .playback, mode: .default,
+        options: [.allowBluetoothA2DP, .allowAirPlay]
+      )
       try session.setPreferredIOBufferDuration(0.005)
       try session.setActive(true, options: .notifyOthersOnDeactivation)
     } catch { print("Session error: \(error)") }
@@ -125,73 +134,53 @@ import Accelerate
   func setupAudioEngine() {
     configureAudioSession()
 
-    audioEngine  = AVAudioEngine()
-    player       = AVAudioPlayerNode()
-    eq           = AVAudioUnitEQ(numberOfBands: 10)
-    reverb       = AVAudioUnitReverb()
-    delay        = AVAudioUnitDelay()
-    distortion   = AVAudioUnitDistortion()
-    timePitch    = AVAudioUnitTimePitch()
-    mixerNode    = AVAudioMixerNode()
+    audioEngine = AVAudioEngine()
+    player      = AVAudioPlayerNode()
+    eq          = AVAudioUnitEQ(numberOfBands: 10)
+    reverb      = AVAudioUnitReverb()
+    delay       = AVAudioUnitDelay()
+    distortion  = AVAudioUnitDistortion()
+    timePitch   = AVAudioUnitTimePitch()
+    mixerNode   = AVAudioMixerNode()
 
-    // Compresseur multibande via DynamicsProcessor
-    var compDesc = AudioComponentDescription(
+    let compDesc = AudioComponentDescription(
       componentType: kAudioUnitType_Effect,
       componentSubType: kAudioUnitSubType_DynamicsProcessor,
       componentManufacturer: kAudioUnitManufacturer_Apple,
-      componentFlags: 0, componentFlagsMask: 0)
+      componentFlags: 0, componentFlagsMask: 0
+    )
     compressor = AVAudioUnitEffect(audioComponentDescription: compDesc)
 
-    guard let engine = audioEngine, let player = player, let eq = eq,
-          let reverb = reverb, let delay = delay, let distortion = distortion,
-          let timePitch = timePitch, let comp = compressor,
-          let mixer = mixerNode else { return }
+    guard
+      let engine = audioEngine, let player = player, let eq = eq,
+      let reverb = reverb, let delay = delay, let distortion = distortion,
+      let timePitch = timePitch, let comp = compressor, let mixer = mixerNode
+    else { return }
 
-    engine.attach(player)
-    engine.attach(eq)
-    engine.attach(reverb)
-    engine.attach(delay)
-    engine.attach(distortion)
-    engine.attach(timePitch)
-    engine.attach(comp)
-    engine.attach(mixer)
+    engine.attach(player); engine.attach(eq); engine.attach(reverb)
+    engine.attach(delay);  engine.attach(distortion); engine.attach(timePitch)
+    engine.attach(comp);   engine.attach(mixer)
 
-    // EQ 10 bandes — profil par défaut (cinéma Dolby)
     applyEQBands(defaultEQBands())
+    reverb.loadFactoryPreset(.largeHall2); reverb.wetDryMix = 25
+    delay.delayTime = 0.28; delay.feedback = 30
+    delay.lowPassCutoff = 9000; delay.wetDryMix = 12
+    distortion.loadFactoryPreset(.drumsBitBrush); distortion.wetDryMix = 3
 
-    reverb.loadFactoryPreset(.largeHall2)
-    reverb.wetDryMix = 25
-
-    delay.delayTime = 0.28
-    delay.feedback = 30
-    delay.lowPassCutoff = 9000
-    delay.wetDryMix = 12
-
-    // Exciter harmonique : distortion douce 2nd harmonique
-    distortion.loadFactoryPreset(.drumsBitBrush)
-    distortion.wetDryMix = 3
-
-    // Compresseur multibande - configuration simplifiée
-    // Nous utiliserons les paramètres par défaut du DynamicsProcessor
-    // qui fournit déjà une bonne compression pour l'audio cinéma
-
-    let format = engine.mainMixerNode.outputFormat(forBus: 0)
-    // Chaîne : player → EQ → distortion(exciter) → compressor → delay → reverb → timePitch → mixer → main
-    engine.connect(player,     to: eq,          format: format)
-    engine.connect(eq,         to: distortion,  format: format)
-    engine.connect(distortion, to: comp,        format: format)
-    engine.connect(comp,       to: delay,       format: format)
-    engine.connect(delay,      to: reverb,      format: format)
-    engine.connect(reverb,     to: timePitch,   format: format)
-    engine.connect(timePitch,  to: mixer,       format: format)
+    let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2)!
+    engine.connect(player,     to: eq,         format: format)
+    engine.connect(eq,         to: distortion, format: format)
+    engine.connect(distortion, to: comp,       format: format)
+    engine.connect(comp,       to: delay,      format: format)
+    engine.connect(delay,      to: reverb,     format: format)
+    engine.connect(reverb,     to: timePitch,  format: format)
+    engine.connect(timePitch,  to: mixer,      format: format)
     engine.connect(mixer,      to: engine.mainMixerNode, format: format)
     engine.mainMixerNode.outputVolume = 1.0
 
     engine.prepare()
-    do {
-      try engine.start()
-      isEngineRunning = true
-    } catch { print("Engine start error: \(error)") }
+    do { try engine.start(); isEngineRunning = true }
+    catch { print("Engine start error: \(error)") }
 
     NotificationCenter.default.removeObserver(self, name: AVAudioSession.routeChangeNotification, object: nil)
     NotificationCenter.default.addObserver(self, selector: #selector(handleRouteChange),
@@ -206,19 +195,13 @@ import Accelerate
 
   // MARK: - EQ Profiles
 
-  private func defaultEQBands() -> [(Float, Float)] {
-    [(32,4),(64,3),(125,2),(250,1),(500,1),(1000,2),(2000,3),(4000,4),(8000,5),(12000,4)]
-  }
-
-  // ThinkPlus P23 (Bluetooth 10mm driver) : boost 60Hz, coupe 300Hz, boost 3kHz, air 12kHz
-  private func p23EQBands() -> [(Float, Float)] {
-    [(32,2),(60,6),(125,1),(300,-4),(500,0),(1000,1),(3000,5),(4000,3),(8000,2),(12000,6)]
-  }
-
-  // Série L201 (filaire) : courbe plus plate, moins de coloration
-  private func l201EQBands() -> [(Float, Float)] {
-    [(32,1),(64,3),(125,2),(250,-2),(500,0),(1000,2),(2000,2),(4000,3),(8000,3),(12000,4)]
-  }
+  private func defaultEQBands()          -> [(Float, Float)] { [(32,4),(64,3),(125,2),(250,1),(500,1),(1000,2),(2000,3),(4000,4),(8000,5),(12000,4)] }
+  private func lp23EQBands()             -> [(Float, Float)] { [(32,2),(60,6),(125,1),(300,-4),(500,0),(1000,1),(3000,5),(4000,3),(8000,2),(12000,6)] }
+  private func lp201EQBands()            -> [(Float, Float)] { [(32,1),(64,3),(125,2),(250,-2),(500,0),(1000,2),(2000,2),(4000,3),(8000,3),(12000,4)] }
+  private func airpodsEQBands()          -> [(Float, Float)] { [(32,2),(64,2),(125,1),(250,0),(500,0),(1000,1),(2000,2),(4000,3),(8000,3),(12000,5)] }
+  private func genericBluetoothEQBands() -> [(Float, Float)] { [(32,3),(64,3),(125,2),(250,0),(500,0),(1000,1),(2000,2),(4000,3),(8000,3),(12000,3)] }
+  private func wiredEQBands()            -> [(Float, Float)] { [(32,2),(64,2),(125,1),(250,0),(500,0),(1000,1),(2000,2),(4000,3),(8000,4),(12000,4)] }
+  private func speakerEQBands()          -> [(Float, Float)] { [(32,-4),(64,-2),(125,0),(250,2),(500,3),(1000,4),(2000,3),(4000,2),(8000,1),(12000,0)] }
 
   private func applyEQBands(_ bands: [(Float, Float)]) {
     guard let eq = eq else { return }
@@ -238,9 +221,101 @@ import Accelerate
   func applyEQProfile(_ profile: String) {
     currentEQProfile = profile
     switch profile {
-    case "p23":    applyEQBands(p23EQBands())
-    case "l201":   applyEQBands(l201EQBands())
-    default:       applyEQBands(defaultEQBands())
+    case "lp23":      applyEQBands(lp23EQBands())
+    case "lp201":     applyEQBands(lp201EQBands())
+    case "airpods":   applyEQBands(airpodsEQBands())
+    case "bluetooth": applyEQBands(genericBluetoothEQBands())
+    case "wired":     applyEQBands(wiredEQBands())
+    case "speaker":   applyEQBands(speakerEQBands())
+    default:          applyEQBands(defaultEQBands())
+    }
+  }
+
+  // MARK: - Device → Profile binding (résistant au renommage)
+  // Sauvegarde dans UserDefaults : clé "eq_profile_for_<nomExactAppareil>"
+  // Fonctionne même si l'appareil s'appelle "<->" ou ">-<"
+
+  private func savedProfile(for deviceName: String) -> String? {
+    UserDefaults.standard.string(forKey: "eq_profile_for_\(deviceName)")
+  }
+
+  func bindDeviceProfile(name: String, profile: String) {
+    UserDefaults.standard.set(profile, forKey: "eq_profile_for_\(name)")
+    applyEQProfile(profile)
+  }
+
+  // MARK: - Audio Device Detection (universel)
+  // Fonctionne avec : AirPods, Bluetooth générique, filaire, haut-parleur,
+  // HDMI, AirPlay, et tout appareil renommé avec n'importe quel nom
+
+  func getCurrentAudioDevice() -> String {
+    let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
+    guard let port = outputs.first else { return "speaker" }
+    let rawName = port.portName
+    let name    = rawName.lowercased()
+
+    switch port.portType {
+
+    case .bluetoothA2DP, .bluetoothHFP, .bluetoothLE:
+      // Priorité 1 : profil associé manuellement (résistant à tout renommage)
+      if let saved = savedProfile(for: rawName) { return "saved:\(rawName):\(saved)" }
+      // Priorité 2 : détection par nom d'usine
+      if name.contains("lp23")    || name.contains("lp-23")  || name.contains("thinkplus") { return "auto:lp23" }
+      if name.contains("lp201")   || name.contains("lp-201") || name.contains("lp 201")    { return "auto:lp201" }
+      if name.contains("airpods")                                                            { return "auto:airpods" }
+      // Priorité 3 : Bluetooth inconnu → profil générique + notification Flutter
+      return "unknown_bt:\(rawName)"
+
+    case .headphones, .headsetMic:
+      if let saved = savedProfile(for: rawName) { return "saved:\(rawName):\(saved)" }
+      if name.contains("lp201") || name.contains("lp-201")   { return "auto:lp201" }
+      if name.contains("airpods")                             { return "auto:airpods" }
+      return "wired:\(rawName)"
+
+    case .airPlay:
+      return "airplay:\(rawName)"
+
+    case .builtInSpeaker:
+      return "speaker"
+
+    case .builtInReceiver:
+      return "receiver"
+
+    default:
+      // HDMI, USB, CarPlay, etc.
+      if let saved = savedProfile(for: rawName) { return "saved:\(rawName):\(saved)" }
+      return "other:\(rawName)"
+    }
+  }
+
+  private func autoApplyEQForDevice() {
+    let device = getCurrentAudioDevice()
+
+    if device == "speaker" || device == "receiver" {
+      applyEQProfile("speaker")
+
+    } else if device.hasPrefix("saved:") {
+      // "saved:<nom>:<profil>" — le nom peut contenir des ":" donc on split sur 2 max
+      let parts = device.split(separator: ":", maxSplits: 2).map(String.init)
+      if parts.count == 3 { applyEQProfile(parts[2]) }
+
+    } else if device.hasPrefix("auto:") {
+      applyEQProfile(String(device.dropFirst("auto:".count)))
+
+    } else if device.hasPrefix("wired:") {
+      applyEQProfile("wired")
+
+    } else if device.hasPrefix("airplay:") {
+      applyEQProfile("default")
+
+    } else if device.hasPrefix("unknown_bt:") {
+      // Bluetooth inconnu → profil générique immédiat + Flutter propose l'association
+      applyEQProfile("bluetooth")
+      let rawName = String(device.dropFirst("unknown_bt:".count))
+      channel?.invokeMethod("onUnknownDevice", arguments: ["name": rawName])
+
+    } else {
+      applyEQProfile("default")
     }
   }
 
@@ -254,57 +329,36 @@ import Accelerate
     switch preset {
     case "cinema":
       reverb.loadFactoryPreset(.largeHall2); reverb.wetDryMix = 30
-      delay.wetDryMix = 15; delay.delayTime = 0.28
-      distortion.wetDryMix = 3
+      delay.wetDryMix = 15; delay.delayTime = 0.28; distortion.wetDryMix = 3
       eq.bands[0].gain = 5; eq.bands[9].gain = 4
-      audioEngine?.mainMixerNode.outputVolume = 1.2
-      applyCrossfeed(0.3) // Crossfeed pour simulation enceintes cinéma
-
+      audioEngine?.mainMixerNode.outputVolume = 1.0; applyCrossfeed(0.3)
     case "concert":
       reverb.loadFactoryPreset(.largeRoom2); reverb.wetDryMix = 40
-      delay.wetDryMix = 20; delay.delayTime = 0.35
-      distortion.wetDryMix = 5
+      delay.wetDryMix = 20; delay.delayTime = 0.35; distortion.wetDryMix = 5
       eq.bands[0].gain = 3; eq.bands[5].gain = 4; eq.bands[9].gain = 5
-      audioEngine?.mainMixerNode.outputVolume = 1.3
-      applyCrossfeed(0.2)
-
+      audioEngine?.mainMixerNode.outputVolume = 1.0; applyCrossfeed(0.2)
     case "studio":
       reverb.loadFactoryPreset(.smallRoom); reverb.wetDryMix = 8
-      delay.wetDryMix = 5; delay.delayTime = 0.1
-      distortion.wetDryMix = 2
+      delay.wetDryMix = 5; delay.delayTime = 0.1; distortion.wetDryMix = 2
       applyEQBands(defaultEQBands())
-      audioEngine?.mainMixerNode.outputVolume = 1.0
-      applyCrossfeed(0.0) // Pas de crossfeed en studio
-
+      audioEngine?.mainMixerNode.outputVolume = 1.0; applyCrossfeed(0.0)
     case "bassBoost":
-      reverb.wetDryMix = 15
-      delay.wetDryMix = 8
-      distortion.wetDryMix = 6
-      eq.bands[0].gain = 10; eq.bands[1].gain = 8; eq.bands[2].gain = 5
-      eq.bands[3].gain = -2
-      audioEngine?.mainMixerNode.outputVolume = 1.1
-      applyCrossfeed(0.1)
-
+      reverb.wetDryMix = 15; delay.wetDryMix = 8; distortion.wetDryMix = 6
+      eq.bands[0].gain = 10; eq.bands[1].gain = 8; eq.bands[2].gain = 5; eq.bands[3].gain = -2
+      audioEngine?.mainMixerNode.outputVolume = 1.0; applyCrossfeed(0.1)
     case "vocal":
       reverb.loadFactoryPreset(.mediumHall); reverb.wetDryMix = 20
-      delay.wetDryMix = 10; delay.delayTime = 0.15
-      distortion.wetDryMix = 4
+      delay.wetDryMix = 10; delay.delayTime = 0.15; distortion.wetDryMix = 4
       eq.bands[4].gain = 3; eq.bands[5].gain = 6; eq.bands[6].gain = 7
       eq.bands[7].gain = 5; eq.bands[0].gain = -2
-      audioEngine?.mainMixerNode.outputVolume = 1.15
-      applyCrossfeed(0.25)
-
+      audioEngine?.mainMixerNode.outputVolume = 1.0; applyCrossfeed(0.25)
     default: break
     }
   }
 
-  // MARK: - Crossfeed stéréo (simulation écoute enceintes)
-  // Implémenté via le mixerNode outputVolume + pan subtil sur le player
   private func applyCrossfeed(_ amount: Float) {
-    // amount 0..1 : 0 = stéréo pure, 1 = mono (crossfeed max)
-    // On simule en réduisant la séparation stéréo via le volume du mixer
     mixerNode?.outputVolume = 1.0 - (amount * 0.15)
-    player?.pan = 0 // centré
+    player?.pan = 0
   }
 
   // MARK: - Remote Controls
@@ -323,41 +377,13 @@ import Accelerate
 
   private func updateNowPlaying() {
     var info = [String: Any]()
-    info[MPMediaItemPropertyTitle] = playlist.isEmpty ? "Cinema Audio Luxe" :
-      URL(fileURLWithPath: playlist[currentIndex]).deletingPathExtension().lastPathComponent
+    info[MPMediaItemPropertyTitle] = playlist.isEmpty
+      ? "Cinema Audio Luxe"
+      : URL(fileURLWithPath: playlist[currentIndex]).deletingPathExtension().lastPathComponent
     info[MPMediaItemPropertyPlaybackDuration] = getDuration()
     info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = getPosition()
     info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
     MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-  }
-
-  // MARK: - Audio Device Detection
-
-  func getCurrentAudioDevice() -> String {
-    let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
-    guard let port = outputs.first else { return "speaker" }
-    switch port.portType {
-    case .bluetoothA2DP, .bluetoothHFP, .bluetoothLE:
-      let name = port.portName.lowercased()
-      if name.contains("p23") || name.contains("thinkplus") { return "lenovo_p23" }
-      if name.contains("l20") || name.contains("l201")      { return "lenovo_l201" }
-      return "bluetooth:\(port.portName)"
-    case .headphones:
-      let name = port.portName.lowercased()
-      if name.contains("lenovo") || name.contains("l20") { return "lenovo_l201" }
-      return "headphones:\(port.portName)"
-    case .builtInSpeaker: return "speaker"
-    default: return port.portName
-    }
-  }
-
-  private func autoApplyEQForDevice() {
-    let device = getCurrentAudioDevice()
-    switch device {
-    case "lenovo_p23": applyEQProfile("p23")
-    case "lenovo_l201": applyEQProfile("l201")
-    default: applyEQProfile("default")
-    }
   }
 
   // MARK: - Playback
@@ -366,8 +392,7 @@ import Accelerate
     if audioEngine == nil { setupAudioEngine() }
     do {
       audioFile = try AVAudioFile(forReading: URL(fileURLWithPath: path))
-      seekFrameOffset = 0; lastSeekTime = 0
-      player?.stop()
+      seekFrameOffset = 0; lastSeekTime = 0; player?.stop()
     } catch { print("Load error: \(error)") }
   }
 
@@ -381,27 +406,21 @@ import Accelerate
     guard let file = audioFile else { return }
     if audioEngine == nil || !isEngineRunning { setupAudioEngine() }
     guard let player = player, isEngineRunning else { return }
-
     player.stop()
     let startFrame = seekFrameOffset
     let remaining  = file.length - startFrame
     guard remaining > 0 else { return }
-
     player.scheduleSegment(file, startingFrame: startFrame,
       frameCount: AVAudioFrameCount(remaining), at: nil) { [weak self] in
       DispatchQueue.main.async { self?.onTrackFinished() }
     }
-    player.play()
-    isPlaying = true
-    updateNowPlaying()
+    player.play(); isPlaying = true; updateNowPlaying()
   }
 
   func pause() {
-    lastSeekTime = getPosition()
+    lastSeekTime    = getPosition()
     seekFrameOffset = AVAudioFramePosition(lastSeekTime * (audioFile?.processingFormat.sampleRate ?? 44100))
-    player?.pause()
-    isPlaying = false
-    updateNowPlaying()
+    player?.pause(); isPlaying = false; updateNowPlaying()
   }
 
   func seek(to position: Double) {
@@ -409,7 +428,6 @@ import Accelerate
     let framePos  = AVAudioFramePosition(position * file.processingFormat.sampleRate)
     let remaining = file.length - framePos
     guard remaining > 0 else { return }
-
     seekFrameOffset = framePos; lastSeekTime = position
     let wasPlaying = isPlaying
     player.stop()
@@ -430,8 +448,7 @@ import Accelerate
     guard let player = player, let file = audioFile else { return lastSeekTime }
     if let nodeTime = player.lastRenderTime,
        let playerTime = player.playerTime(forNodeTime: nodeTime) {
-      let pos = lastSeekTime + Double(playerTime.sampleTime) / playerTime.sampleRate
-      return min(pos, getDuration())
+      return min(lastSeekTime + Double(playerTime.sampleTime) / playerTime.sampleRate, getDuration())
     }
     return lastSeekTime
   }
@@ -441,8 +458,7 @@ import Accelerate
   private func buildShuffleOrder() {
     shuffledIndices = Array(0..<playlist.count).shuffled()
     if let pos = shuffledIndices.firstIndex(of: currentIndex) {
-      shuffledIndices.swapAt(0, pos)
-      shufflePosition = 0
+      shuffledIndices.swapAt(0, pos); shufflePosition = 0
     }
   }
 
@@ -461,22 +477,16 @@ import Accelerate
       return shuffledIndices[shufflePosition]
     } else {
       let next = currentIndex + 1
-      if next >= playlist.count {
-        return repeatMode == 1 ? 0 : nil
-      }
+      if next >= playlist.count { return repeatMode == 1 ? 0 : nil }
       return next
     }
   }
 
   private func onTrackFinished() {
     isPlaying = false
-    if repeatMode == 2 {
-      seek(to: 0); play(); return
-    }
+    if repeatMode == 2 { seek(to: 0); play(); return }
     if let next = nextIndex() {
-      currentIndex = next
-      loadAudio(path: playlist[currentIndex])
-      play()
+      currentIndex = next; loadAudio(path: playlist[currentIndex]); play()
       channel?.invokeMethod("onTrackChanged", arguments: ["index": currentIndex])
     } else {
       channel?.invokeMethod("onTrackFinished", arguments: nil)
@@ -486,9 +496,7 @@ import Accelerate
   func playNext() {
     guard !playlist.isEmpty else { return }
     if let next = nextIndex() {
-      currentIndex = next
-      loadAudio(path: playlist[currentIndex])
-      play()
+      currentIndex = next; loadAudio(path: playlist[currentIndex]); play()
       channel?.invokeMethod("onTrackChanged", arguments: ["index": currentIndex])
     }
   }
@@ -496,16 +504,12 @@ import Accelerate
   func playPrevious() {
     if getPosition() > 3 { seek(to: 0); return }
     if shuffleEnabled {
-      if shufflePosition > 0 {
-        shufflePosition -= 1
-        currentIndex = shuffledIndices[shufflePosition]
-      }
+      if shufflePosition > 0 { shufflePosition -= 1; currentIndex = shuffledIndices[shufflePosition] }
     } else {
       guard currentIndex > 0 else { seek(to: 0); return }
       currentIndex -= 1
     }
-    loadAudio(path: playlist[currentIndex])
-    play()
+    loadAudio(path: playlist[currentIndex]); play()
     channel?.invokeMethod("onTrackChanged", arguments: ["index": currentIndex])
   }
 
@@ -515,27 +519,22 @@ import Accelerate
     switch effect {
     case "reverb":    reverb?.wetDryMix = value * 100
     case "bass":
-      eq?.bands[0].gain = value * 14
-      eq?.bands[1].gain = value * 11
-      eq?.bands[2].gain = value * 8
-    case "volume":    audioEngine?.mainMixerNode.outputVolume = 1.0 + value * 2.0
+      eq?.bands[0].gain = value * 14; eq?.bands[1].gain = value * 11; eq?.bands[2].gain = value * 8
+    case "volume":
+      audioEngine?.mainMixerNode.outputVolume = min(1.0, max(0.0, value))
     case "delay":     delay?.wetDryMix = value * 50
     case "warmth":    distortion?.wetDryMix = value * 20
     case "clarity":
-      eq?.bands[6].gain = value * 8
-      eq?.bands[7].gain = value * 10
-      eq?.bands[8].gain = value * 12
+      eq?.bands[6].gain = value * 8; eq?.bands[7].gain = value * 10; eq?.bands[8].gain = value * 12
     case "presence":
-      eq?.bands[4].gain = value * 6
-      eq?.bands[5].gain = value * 8
+      eq?.bands[4].gain = value * 6; eq?.bands[5].gain = value * 8
     case "pitch":     timePitch?.pitch = value * 400 - 200
     case "crossfeed": applyCrossfeed(value)
     case "exciter":   distortion?.wetDryMix = value * 15
     case "compress":
-      if let au = compressor?.audioUnit {
-        let threshold = -40 + value * 30  // -40dB à -10dB
-        AudioUnitSetParameter(au, kDynamicsProcessorParam_Threshold,
-          kAudioUnitScope_Global, 0, threshold, 0)
+      if let au = compressor {
+        AudioUnitSetParameter(au.audioUnit, kDynamicsProcessorParam_Threshold,
+          kAudioUnitScope_Global, 0, Float(-40 + value * 30), 0)
       }
     default: break
     }
@@ -550,16 +549,14 @@ import Accelerate
 
     switch reason {
     case .newDeviceAvailable:
-      // Auto-detect Lenovo et appliquer le bon profil EQ
-      let device = getCurrentAudioDevice()
-      if device == "lenovo_p23"  { applyEQProfile("p23") }
-      else if device == "lenovo_l201" { applyEQProfile("l201") }
-      channel?.invokeMethod("onDeviceChanged", arguments: ["device": device])
+      autoApplyEQForDevice()
+      channel?.invokeMethod("onDeviceChanged", arguments: ["device": getCurrentAudioDevice()])
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
         self?.restartEngineKeepingPosition()
       }
     case .oldDeviceUnavailable:
       if isPlaying { pause() }
+      applyEQProfile("speaker")
       channel?.invokeMethod("onDeviceChanged", arguments: ["device": "speaker"])
     case .categoryChange, .override:
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
@@ -582,8 +579,7 @@ import Accelerate
   }
 
   private func restartEngineKeepingPosition() {
-    let savedPos = getPosition()
-    let wasPlaying = isPlaying
+    let savedPos = getPosition(); let wasPlaying = isPlaying
     guard let engine = audioEngine else {
       setupAudioEngine(); if wasPlaying { play() }; return
     }
