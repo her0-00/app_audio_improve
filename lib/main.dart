@@ -11,9 +11,6 @@ void main() {
   runApp(const CinemaAudioLuxeApp());
 }
 
-// ─── Modèle piste ────────────────────────────────────────────────────────────
-// Using AudioTrack from models.dart
-
 // ─── État global partagé ─────────────────────────────────────────────────────
 class AudioState extends ChangeNotifier {
   static const _ch = MethodChannel('cinema.audio.luxe/audio');
@@ -24,36 +21,38 @@ class AudioState extends ChangeNotifier {
   AudioTrack? get current => _library.currentTrack;
   bool isPlaying = false;
   double position = 0;
-  double get duration => current != null ? current!.duration : 1;
+  double get duration => (current?.duration ?? 0) > 0 ? current!.duration : 1;
   Timer? _posTimer;
+  Timer? _spectrumTimer;
 
-  // New: presets, shuffle, repeat, device
-  String currentPreset = "cinema";
+  String currentPreset = 'cinema';
   bool shuffleEnabled = false;
-  int repeatMode = 0; // 0=off, 1=all, 2=one
-  String currentDevice = "speaker";
-  List<double> spectrumData = List.filled(32, 0.0); // For visualizer
+  int repeatMode = 0;
+  String currentDevice = 'speaker';
+  List<double> spectrumData = List.filled(32, 0.0);
 
   AudioState() {
     _ch.setMethodCallHandler(_onNativeCall);
-    _library.loadLibrary(); // Load saved library
+    _library.loadLibrary();
     _startSpectrumTimer();
   }
 
   void _startSpectrumTimer() {
-    Timer.periodic(const Duration(milliseconds: 100), (_) {
-      if (isPlaying) {
-        // Simulate spectrum data
-        spectrumData = List.generate(32, (_) => (0.1 + 0.9 * (DateTime.now().millisecondsSinceEpoch % 1000) / 1000.0) * (0.3 + 0.7 * (DateTime.now().microsecondsSinceEpoch % 1000000) / 1000000.0));
-        notifyListeners();
-      }
+    _spectrumTimer?.cancel();
+    _spectrumTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      if (!isPlaying) return;
+      final t = DateTime.now().millisecondsSinceEpoch;
+      spectrumData = List.generate(32, (i) {
+        final v = ((t + i * 137) % 1000) / 1000.0;
+        return (0.1 + 0.9 * v).clamp(0.0, 1.0);
+      });
+      notifyListeners();
     });
   }
 
   Future<void> _onNativeCall(MethodCall call) async {
     switch (call.method) {
       case 'onTrackChanged':
-        // currentIndex updated via library
         position = 0;
         isPlaying = true;
         notifyListeners();
@@ -61,73 +60,94 @@ class AudioState extends ChangeNotifier {
       case 'onTrackFinished':
         isPlaying = false;
         position = 0;
-        // Handle repeat/shuffle
-        if (repeatMode == 2) { // repeat one
-          playIndex(currentIndex);
-        } else if (repeatMode == 1 || (repeatMode == 0 && _library.hasNext())) { // repeat all or next
-          next();
-        }
+        _posTimer?.cancel();
         notifyListeners();
         break;
       case 'onDeviceChanged':
         if (call.arguments is Map) {
-          currentDevice = (call.arguments as Map)['device'] ?? "speaker";
+          currentDevice = (call.arguments as Map)['device']?.toString() ?? 'speaker';
+          notifyListeners();
+        }
+        break;
+      case 'onUnknownDevice':
+        // Appareil Bluetooth inconnu → on applique le profil générique sans crash
+        if (call.arguments is Map) {
+          currentDevice = (call.arguments as Map)['name']?.toString() ?? 'bluetooth';
           notifyListeners();
         }
         break;
       case 'onSpectrumData':
         if (call.arguments is List) {
-          spectrumData = (call.arguments as List).map((e) => (e as num).toDouble()).toList();
+          spectrumData = (call.arguments as List)
+              .map((e) => (e as num).toDouble())
+              .toList();
           notifyListeners();
         }
         break;
     }
   }
 
+  // ── Ajout de fichiers ───────────────────────────────────────────────────────
+  // CORRECTION PRINCIPALE : chaque opération native est isolée dans son propre
+  // try/catch pour éviter qu'une erreur sur un seul fichier ferme l'app.
+
   Future<void> addFiles() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['mp3', 'wav', 'flac', 'm4a', 'aac'],
-      allowMultiple: true,
-    );
+    FilePickerResult? result;
+    try {
+      result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['mp3', 'wav', 'flac', 'm4a', 'aac', 'ogg', 'opus'],
+        allowMultiple: true,
+      );
+    } catch (e) {
+      debugPrint('FilePicker error: $e');
+      return; // Annulation ou permission refusée → on sort proprement
+    }
     if (result == null) return;
 
     int addedCount = 0;
     for (final f in result.files) {
-      if (f.path != null) {
-        try {
-          // Vérifier que le fichier existe et est accessible
-          final file = File(f.path!);
-          if (!await file.exists()) {
-            print('File does not exist: ${f.path}');
-            continue;
-          }
+      final path = f.path;
+      if (path == null) continue;
 
-          final track = AudioTrack(
-            id: DateTime.now().millisecondsSinceEpoch.toString() + f.name,
-            path: f.path!,
-            title: f.name.split('.').first,
-            duration: 0, // Will be set when loaded
-          );
-          _library.addTrack(track);
-          addedCount++;
-        } catch (e) {
-          print('Error adding file ${f.name}: $e');
-          // Continue with other files
-        }
-      }
-    }
-
-    if (addedCount > 0) {
+      // Vérification existence fichier
       try {
-        if (queue.isNotEmpty && current == null) {
-          await _loadCurrent();
-        } else {
-          await _syncPlaylist();
+        if (!await File(path).exists()) {
+          debugPrint('Fichier introuvable: $path');
+          continue;
         }
       } catch (e) {
-        print('Error loading audio after adding files: $e');
-        // Reset to safe state
+        debugPrint('Erreur accès fichier $path: $e');
+        continue;
+      }
+
+      // Ajout à la bibliothèque
+      final track = AudioTrack(
+        id: '${DateTime.now().microsecondsSinceEpoch}_${f.name}',
+        path: path,
+        title: f.name.contains('.')
+            ? f.name.substring(0, f.name.lastIndexOf('.'))
+            : f.name,
+        duration: 0,
+      );
+      _library.addTrack(track);
+      addedCount++;
+    }
+
+    if (addedCount == 0) return;
+
+    // CORRECTION : charger la playlist dans un try/catch global
+    // Si ça échoue, on reste dans un état stable (pas de crash)
+    try {
+      await _syncPlaylist();
+    } catch (e) {
+      debugPrint('Erreur sync playlist: $e');
+      // Fallback : tenter de charger uniquement la piste courante
+      try {
+        await _loadCurrent();
+      } catch (e2) {
+        debugPrint('Erreur load current: $e2');
+        // État minimal stable : on a les pistes dans la liste mais pas de lecture
         isPlaying = false;
         position = 0;
       }
@@ -138,61 +158,81 @@ class AudioState extends ChangeNotifier {
 
   Future<void> playIndex(int index) async {
     _library.jumpTo(index);
-    await _syncPlaylist();
-    await play();
+    try {
+      await _syncPlaylist();
+      await play();
+    } catch (e) {
+      debugPrint('playIndex error: $e');
+      isPlaying = false;
+      notifyListeners();
+    }
   }
 
+  // CORRECTION : getDuration retourne 0.0 en cas d'erreur, jamais d'exception
   Future<void> _loadCurrent() async {
-    if (queue.isEmpty) return;
+    if (queue.isEmpty || current == null) return;
     try {
       await _ch.invokeMethod('loadAudio', {'path': current!.path});
-      final dur = await _ch.invokeMethod<double>('getDuration') ?? 1.0;
-      // Update duration in library
-      if (current != null) {
-        final updated = current!.copyWith(duration: dur);
-        _library.updateTrack(updated);
-      }
-      position = 0;
     } catch (e) {
-      print('Error loading current track: $e');
-      // Skip this track and try next one
+      debugPrint('loadAudio error: $e');
+      // Si le fichier ne se charge pas, on skip au suivant
       if (_library.hasNext()) {
         _library.next();
         await _loadCurrent();
       }
+      return;
     }
+
+    try {
+      final dur = await _ch.invokeMethod<double>('getDuration') ?? 0.0;
+      if (dur > 0 && current != null) {
+        _library.updateTrack(current!.copyWith(duration: dur));
+      }
+    } catch (e) {
+      debugPrint('getDuration error: $e'); // Non bloquant
+    }
+    position = 0;
     notifyListeners();
   }
 
+  // CORRECTION : _syncPlaylist ne propage plus d'exception vers addFiles
   Future<void> _syncPlaylist() async {
+    if (queue.isEmpty) return;
     try {
       await _ch.invokeMethod('loadPlaylist', {
         'paths': queue.map((t) => t.path).toList(),
         'index': currentIndex,
       });
-      final dur = await _ch.invokeMethod<double>('getDuration') ?? 1.0;
-      if (current != null) {
-        final updated = current!.copyWith(duration: dur);
-        _library.updateTrack(updated);
-      }
-      position = 0;
     } catch (e) {
-      print('Error syncing playlist: $e');
-      // Try to load current track individually
+      debugPrint('loadPlaylist error: $e');
+      // Fallback sur loadAudio simple
       await _loadCurrent();
+      return;
     }
+
+    try {
+      final dur = await _ch.invokeMethod<double>('getDuration') ?? 0.0;
+      if (dur > 0 && current != null) {
+        _library.updateTrack(current!.copyWith(duration: dur));
+      }
+    } catch (e) {
+      debugPrint('getDuration error: $e'); // Non bloquant
+    }
+    position = 0;
     notifyListeners();
   }
 
   Future<void> play() async {
     if (queue.isEmpty) return;
-    if (current == null) await _loadCurrent();
+    if (current == null) {
+      try { await _loadCurrent(); } catch (e) { return; }
+    }
     try {
       await _ch.invokeMethod('play');
       isPlaying = true;
       _startTimer();
     } catch (e) {
-      print('Error playing: $e');
+      debugPrint('play error: $e');
       isPlaying = false;
     }
     notifyListeners();
@@ -201,11 +241,11 @@ class AudioState extends ChangeNotifier {
   Future<void> pause() async {
     try {
       await _ch.invokeMethod('pause');
-      isPlaying = false;
-      _posTimer?.cancel();
     } catch (e) {
-      print('Error pausing: $e');
+      debugPrint('pause error: $e');
     }
+    isPlaying = false;
+    _posTimer?.cancel();
     notifyListeners();
   }
 
@@ -216,66 +256,80 @@ class AudioState extends ChangeNotifier {
       await _ch.invokeMethod('seek', {'position': pos});
       position = pos;
     } catch (e) {
-      print('Error seeking: $e');
+      debugPrint('seek error: $e');
     }
     notifyListeners();
   }
 
   Future<void> next() async {
-    if (shuffleEnabled) {
-      // Shuffle logic
-      if (_library.hasNext()) {
-        _library.next();
-        await _syncPlaylist();
-        await play();
-      }
-    } else {
+    try {
       await _ch.invokeMethod('next');
+    } catch (e) {
+      debugPrint('next error: $e');
     }
   }
 
   Future<void> previous() async {
-    if (shuffleEnabled) {
-      if (_library.hasPrevious()) {
-        _library.previous();
-        await _syncPlaylist();
-        await play();
-      }
-    } else {
+    try {
       await _ch.invokeMethod('previous');
+    } catch (e) {
+      debugPrint('previous error: $e');
     }
   }
 
   Future<void> setPreset(String preset) async {
     currentPreset = preset;
-    await _ch.invokeMethod('setPreset', {'preset': preset});
+    try {
+      await _ch.invokeMethod('setPreset', {'preset': preset});
+    } catch (e) {
+      debugPrint('setPreset error: $e');
+    }
     notifyListeners();
   }
 
   Future<void> setShuffle(bool enabled) async {
     shuffleEnabled = enabled;
-    await _ch.invokeMethod('setShuffle', {'enabled': enabled});
-    if (enabled) {
-      // Build shuffle order
+    try {
+      await _ch.invokeMethod('setShuffle', {'enabled': enabled});
+    } catch (e) {
+      debugPrint('setShuffle error: $e');
     }
     notifyListeners();
   }
 
   Future<void> setRepeat(int mode) async {
     repeatMode = mode;
-    await _ch.invokeMethod('setRepeat', {'mode': mode});
+    try {
+      await _ch.invokeMethod('setRepeat', {'mode': mode});
+    } catch (e) {
+      debugPrint('setRepeat error: $e');
+    }
     notifyListeners();
   }
 
   Future<void> getDevice() async {
-    currentDevice = await _ch.invokeMethod('getAudioDevice') ?? "speaker";
+    try {
+      currentDevice = await _ch.invokeMethod('getAudioDevice') ?? 'speaker';
+    } catch (e) {
+      debugPrint('getDevice error: $e');
+    }
     notifyListeners();
   }
 
-  void reorderQueue(int oldIndex, int newIndex) {
-    if (oldIndex < newIndex) {
-      newIndex -= 1;
+  // Associer un appareil inconnu à un profil EQ depuis Flutter
+  Future<void> bindDeviceProfile(String deviceName, String profile) async {
+    try {
+      await _ch.invokeMethod('bindDeviceProfile', {
+        'name': deviceName,
+        'profile': profile,
+      });
+    } catch (e) {
+      debugPrint('bindDeviceProfile error: $e');
     }
+  }
+
+  void reorderQueue(int oldIndex, int newIndex) {
+    if (oldIndex < newIndex) newIndex -= 1;
     final item = _library.queue.removeAt(oldIndex);
     _library.queue.insert(newIndex, item);
     if (_library.currentIndex == oldIndex) {
@@ -311,6 +365,7 @@ class AudioState extends ChangeNotifier {
   @override
   void dispose() {
     _posTimer?.cancel();
+    _spectrumTimer?.cancel();
     super.dispose();
   }
 }
@@ -329,7 +384,10 @@ class CinemaAudioLuxeApp extends StatelessWidget {
         theme: ThemeData.dark().copyWith(
           scaffoldBackgroundColor: const Color(0xFF080808),
           primaryColor: _gold,
-          colorScheme: const ColorScheme.dark(primary: _gold, secondary: Color(0xFFC0C0C0)),
+          colorScheme: const ColorScheme.dark(
+            primary: _gold,
+            secondary: Color(0xFFC0C0C0),
+          ),
           sliderTheme: SliderThemeData(
             activeTrackColor: _gold,
             inactiveTrackColor: const Color(0xFF2A2A2A),
@@ -353,7 +411,7 @@ String _fmt(double s) {
   return '${m.toString().padLeft(2, '0')}:${sec.toString().padLeft(2, '0')}';
 }
 
-// ─── Shell avec mini-player persistant ───────────────────────────────────────
+// ─── Shell ───────────────────────────────────────────────────────────────────
 class MainShell extends StatefulWidget {
   const MainShell({super.key});
   @override
@@ -365,7 +423,12 @@ class _MainShellState extends State<MainShell> {
 
   @override
   Widget build(BuildContext context) {
-    final pages = [const ImportScreen(), const PlayerScreen(), const QueueScreen(), const MixingConsoleScreen()];
+    final pages = [
+      const ImportScreen(),
+      const PlayerScreen(),
+      const QueueScreen(),
+      const MixingConsoleScreen(),
+    ];
     return Scaffold(
       body: pages[_tab],
       bottomNavigationBar: Column(
@@ -373,7 +436,9 @@ class _MainShellState extends State<MainShell> {
         children: [
           ListenableBuilder(
             listenable: _audio,
-            builder: (_, __) => _audio.current != null ? _MiniPlayer(onTap: () => setState(() => _tab = 1)) : const SizedBox.shrink(),
+            builder: (_, __) => _audio.current != null
+                ? _MiniPlayer(onTap: () => setState(() => _tab = 1))
+                : const SizedBox.shrink(),
           ),
           NavigationBar(
             backgroundColor: const Color(0xFF0D0D0D),
@@ -420,7 +485,9 @@ class _MiniPlayer extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                   ),
                   LinearProgressIndicator(
-                    value: _audio.duration > 0 ? (_audio.position / _audio.duration).clamp(0, 1) : 0,
+                    value: _audio.duration > 0
+                        ? (_audio.position / _audio.duration).clamp(0.0, 1.0)
+                        : 0.0,
                     backgroundColor: const Color(0xFF2A2A2A),
                     valueColor: const AlwaysStoppedAnimation(_gold),
                     minHeight: 2,
@@ -428,12 +495,21 @@ class _MiniPlayer extends StatelessWidget {
                 ],
               ),
             ),
-            IconButton(icon: const Icon(Icons.skip_previous, color: Colors.white70), onPressed: _audio.previous),
             IconButton(
-              icon: Icon(_audio.isPlaying ? Icons.pause : Icons.play_arrow, color: _gold),
+              icon: const Icon(Icons.skip_previous, color: Colors.white70),
+              onPressed: _audio.previous,
+            ),
+            IconButton(
+              icon: Icon(
+                _audio.isPlaying ? Icons.pause : Icons.play_arrow,
+                color: _gold,
+              ),
               onPressed: _audio.togglePlay,
             ),
-            IconButton(icon: const Icon(Icons.skip_next, color: Colors.white70), onPressed: _audio.next),
+            IconButton(
+              icon: const Icon(Icons.skip_next, color: Colors.white70),
+              onPressed: _audio.next,
+            ),
           ],
         ),
       ),
@@ -441,7 +517,7 @@ class _MiniPlayer extends StatelessWidget {
   }
 }
 
-// ─── Écran 1 : Import ─────────────────────────────────────────────────────────
+// ─── Écran 1 : Import ────────────────────────────────────────────────────────
 class ImportScreen extends StatelessWidget {
   const ImportScreen({super.key});
 
@@ -464,7 +540,12 @@ class ImportScreen extends StatelessWidget {
                 const Icon(Icons.theaters, size: 90, color: _gold),
                 const SizedBox(height: 20),
                 const Text('CINEMA AUDIO LUXE',
-                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.w300, letterSpacing: 5, color: _gold)),
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w300,
+                      letterSpacing: 5,
+                      color: _gold,
+                    )),
                 const SizedBox(height: 8),
                 const Text('PATHÉ PALACE · DOLBY ATMOS',
                     style: TextStyle(fontSize: 10, letterSpacing: 3, color: Colors.white38)),
@@ -473,7 +554,8 @@ class ImportScreen extends StatelessWidget {
                   label: '+ AJOUTER DES FICHIERS',
                   onPressed: () async {
                     await _audio.addFiles();
-                    if (_audio.queue.isNotEmpty && context.mounted) {
+                    if (!context.mounted) return;
+                    if (_audio.queue.isNotEmpty) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
                           content: Text('${_audio.queue.length} piste(s) dans la file'),
@@ -500,7 +582,7 @@ class ImportScreen extends StatelessWidget {
   }
 }
 
-// ─── Écran 2 : Lecteur ────────────────────────────────────────────────────────
+// ─── Écran 2 : Lecteur ───────────────────────────────────────────────────────
 class PlayerScreen extends StatelessWidget {
   const PlayerScreen({super.key});
 
@@ -523,26 +605,24 @@ class PlayerScreen extends StatelessWidget {
               return Column(
                 children: [
                   const SizedBox(height: 20),
-                  // Artwork animé
-                  AnimatedRotation(
-                    turns: _audio.isPlaying ? 1.0 : 0.0,
-                    duration: const Duration(seconds: 10),
-                    child: Container(
-                      width: 260,
-                      height: 260,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1A1500),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: _gold, width: 1.5),
-                        boxShadow: [BoxShadow(color: _gold.withOpacity(0.15), blurRadius: 40, spreadRadius: 5)],
-                      ),
-                      child: const Icon(Icons.music_note, size: 100, color: _gold),
+                  // Artwork
+                  Container(
+                    width: 220,
+                    height: 220,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1A1500),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: _gold, width: 1.5),
+                      boxShadow: [
+                        BoxShadow(color: _gold.withOpacity(0.15), blurRadius: 40, spreadRadius: 5),
+                      ],
                     ),
+                    child: const Icon(Icons.music_note, size: 90, color: _gold),
                   ),
-                  const SizedBox(height: 20),
-                  // Visualiseur de spectre
+                  const SizedBox(height: 16),
+                  // Visualiseur spectre
                   SizedBox(
-                    height: 60,
+                    height: 50,
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: List.generate(32, (i) {
@@ -551,7 +631,7 @@ class PlayerScreen extends StatelessWidget {
                           margin: const EdgeInsets.symmetric(horizontal: 1),
                           child: AnimatedContainer(
                             duration: const Duration(milliseconds: 100),
-                            height: (_audio.spectrumData[i] * 60).clamp(4, 60),
+                            height: (_audio.spectrumData[i] * 50).clamp(3.0, 50.0),
                             decoration: BoxDecoration(
                               color: _gold,
                               borderRadius: BorderRadius.circular(2),
@@ -561,19 +641,23 @@ class PlayerScreen extends StatelessWidget {
                       }),
                     ),
                   ),
-                  const SizedBox(height: 10),
-                  // Indicateur périphérique
+                  const SizedBox(height: 8),
+                  // Périphérique actif
                   Text(
-                    'Périphérique: ${_audio.currentDevice}',
-                    style: const TextStyle(color: Colors.white54, fontSize: 12),
+                    '🎧 ${_audio.currentDevice}',
+                    style: const TextStyle(color: Colors.white38, fontSize: 11, letterSpacing: 1),
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 12),
                   // Titre
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 40),
                     child: Text(
                       track?.title ?? 'Aucune piste',
-                      style: const TextStyle(fontSize: 17, color: Colors.white, fontWeight: FontWeight.w500),
+                      style: const TextStyle(
+                        fontSize: 16,
+                        color: Colors.white,
+                        fontWeight: FontWeight.w500,
+                      ),
                       textAlign: TextAlign.center,
                       overflow: TextOverflow.ellipsis,
                       maxLines: 2,
@@ -584,13 +668,13 @@ class PlayerScreen extends StatelessWidget {
                       padding: const EdgeInsets.only(top: 4),
                       child: Text(
                         '${_audio.currentIndex + 1} / ${_audio.queue.length}',
-                        style: const TextStyle(color: Colors.white38, fontSize: 12, letterSpacing: 2),
+                        style: const TextStyle(color: Colors.white38, fontSize: 11, letterSpacing: 2),
                       ),
                     ),
-                  const SizedBox(height: 30),
+                  const SizedBox(height: 16),
                   // Barre de progression
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 30),
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
                     child: Column(
                       children: [
                         Slider(
@@ -601,80 +685,90 @@ class PlayerScreen extends StatelessWidget {
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            Text(_fmt(_audio.position), style: const TextStyle(color: Colors.white54, fontSize: 12)),
-                            Text(_fmt(_audio.duration), style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                            Text(_fmt(_audio.position),
+                                style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                            Text(_fmt(_audio.duration),
+                                style: const TextStyle(color: Colors.white54, fontSize: 11)),
                           ],
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 12),
                   // Contrôles
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       IconButton(
                         icon: const Icon(Icons.skip_previous_rounded),
-                        iconSize: 48,
+                        iconSize: 44,
                         color: Colors.white70,
                         onPressed: _audio.previous,
                       ),
-                      const SizedBox(width: 16),
+                      const SizedBox(width: 12),
                       GestureDetector(
                         onTap: _audio.togglePlay,
                         child: Container(
-                          width: 72,
-                          height: 72,
+                          width: 68,
+                          height: 68,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
                             color: _gold,
-                            boxShadow: [BoxShadow(color: _gold.withOpacity(0.4), blurRadius: 20)],
+                            boxShadow: [
+                              BoxShadow(color: _gold.withOpacity(0.4), blurRadius: 20),
+                            ],
                           ),
                           child: Icon(
                             _audio.isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                            size: 40,
+                            size: 38,
                             color: Colors.black,
                           ),
                         ),
                       ),
-                      const SizedBox(width: 16),
+                      const SizedBox(width: 12),
                       IconButton(
                         icon: const Icon(Icons.skip_next_rounded),
-                        iconSize: 48,
+                        iconSize: 44,
                         color: Colors.white70,
                         onPressed: _audio.next,
                       ),
                     ],
                   ),
-                  const SizedBox(height: 20),
-                  // Sélecteur de preset avec animation
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      _PresetButton(label: 'CINEMA', preset: 'cinema', isSelected: _audio.currentPreset == 'cinema'),
-                      const SizedBox(width: 8),
-                      _PresetButton(label: 'CONCERT', preset: 'concert', isSelected: _audio.currentPreset == 'concert'),
-                      const SizedBox(width: 8),
-                      _PresetButton(label: 'STUDIO', preset: 'studio', isSelected: _audio.currentPreset == 'studio'),
-                      const SizedBox(width: 8),
-                      _PresetButton(label: 'BASS+', preset: 'bassBoost', isSelected: _audio.currentPreset == 'bassBoost'),
-                      const SizedBox(width: 8),
-                      _PresetButton(label: 'VOCAL', preset: 'vocal', isSelected: _audio.currentPreset == 'vocal'),
-                    ],
+                  const SizedBox(height: 14),
+                  // Presets
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Row(
+                      children: [
+                        _PresetButton(label: 'CINEMA',  preset: 'cinema',    isSelected: _audio.currentPreset == 'cinema'),
+                        const SizedBox(width: 6),
+                        _PresetButton(label: 'CONCERT', preset: 'concert',   isSelected: _audio.currentPreset == 'concert'),
+                        const SizedBox(width: 6),
+                        _PresetButton(label: 'STUDIO',  preset: 'studio',    isSelected: _audio.currentPreset == 'studio'),
+                        const SizedBox(width: 6),
+                        _PresetButton(label: 'BASS+',   preset: 'bassBoost', isSelected: _audio.currentPreset == 'bassBoost'),
+                        const SizedBox(width: 6),
+                        _PresetButton(label: 'VOCAL',   preset: 'vocal',     isSelected: _audio.currentPreset == 'vocal'),
+                      ],
+                    ),
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 12),
                   // Shuffle + Repeat
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       IconButton(
-                        icon: Icon(_audio.shuffleEnabled ? Icons.shuffle : Icons.shuffle_outlined, color: _audio.shuffleEnabled ? _gold : Colors.white54),
+                        icon: Icon(
+                          _audio.shuffleEnabled ? Icons.shuffle : Icons.shuffle_outlined,
+                          color: _audio.shuffleEnabled ? _gold : Colors.white54,
+                        ),
                         onPressed: () => _audio.setShuffle(!_audio.shuffleEnabled),
                       ),
                       const SizedBox(width: 20),
                       IconButton(
                         icon: Icon(
-                          _audio.repeatMode == 0 ? Icons.repeat : _audio.repeatMode == 1 ? Icons.repeat_one : Icons.repeat,
+                          _audio.repeatMode == 2 ? Icons.repeat_one : Icons.repeat,
                           color: _audio.repeatMode > 0 ? _gold : Colors.white54,
                         ),
                         onPressed: () => _audio.setRepeat((_audio.repeatMode + 1) % 3),
@@ -695,26 +789,25 @@ class _PresetButton extends StatelessWidget {
   final String label;
   final String preset;
   final bool isSelected;
-
   const _PresetButton({required this.label, required this.preset, required this.isSelected});
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: isSelected ? _gold : Colors.transparent,
-        border: Border.all(color: _gold, width: 1),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: GestureDetector(
-        onTap: () => _audio.setPreset(preset),
+    return GestureDetector(
+      onTap: () => _audio.setPreset(preset),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: isSelected ? _gold : Colors.transparent,
+          border: Border.all(color: _gold, width: 1),
+          borderRadius: BorderRadius.circular(20),
+        ),
         child: Text(
           label,
           style: TextStyle(
             color: isSelected ? Colors.black : _gold,
-            fontSize: 12,
+            fontSize: 11,
             fontWeight: FontWeight.w600,
           ),
         ),
@@ -723,7 +816,7 @@ class _PresetButton extends StatelessWidget {
   }
 }
 
-// ─── Écran 3 : File d'attente / Playlist ─────────────────────────────────────
+// ─── Écran 3 : File d'attente ────────────────────────────────────────────────
 class QueueScreen extends StatelessWidget {
   const QueueScreen({super.key});
 
@@ -733,12 +826,14 @@ class QueueScreen extends StatelessWidget {
       backgroundColor: _dark,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
-        title: const Text('FILE D\'ATTENTE', style: TextStyle(letterSpacing: 3, fontSize: 14, color: _gold)),
+        title: const Text("FILE D'ATTENTE",
+            style: TextStyle(letterSpacing: 3, fontSize: 14, color: _gold)),
         actions: [
           TextButton.icon(
             onPressed: _audio.addFiles,
             icon: const Icon(Icons.add, color: _gold, size: 18),
-            label: const Text('AJOUTER', style: TextStyle(color: _gold, fontSize: 11, letterSpacing: 1)),
+            label: const Text('AJOUTER',
+                style: TextStyle(color: _gold, fontSize: 11, letterSpacing: 1)),
           ),
         ],
       ),
@@ -747,9 +842,11 @@ class QueueScreen extends StatelessWidget {
         builder: (_, __) {
           if (_audio.queue.isEmpty) {
             return const Center(
-              child: Text('Aucune piste\nImportez des fichiers audio',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.white38, fontSize: 14, height: 2)),
+              child: Text(
+                'Aucune piste\nImportez des fichiers audio',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white38, fontSize: 14, height: 2),
+              ),
             );
           }
           return ReorderableListView.builder(
@@ -760,17 +857,20 @@ class QueueScreen extends StatelessWidget {
               final t = _audio.queue[i];
               final isCurrent = i == _audio.currentIndex;
               return ListTile(
-                key: ValueKey(t.path),
+                key: ValueKey(t.id),
                 leading: isCurrent
                     ? const Icon(Icons.equalizer, color: _gold)
-                    : Text('${i + 1}', style: const TextStyle(color: Colors.white38, fontSize: 13)),
-                title: Text(t.title,
-                    style: TextStyle(
-                      color: isCurrent ? _gold : Colors.white,
-                      fontWeight: isCurrent ? FontWeight.w600 : FontWeight.normal,
-                      fontSize: 14,
-                    ),
-                    overflow: TextOverflow.ellipsis),
+                    : Text('${i + 1}',
+                        style: const TextStyle(color: Colors.white38, fontSize: 13)),
+                title: Text(
+                  t.title,
+                  style: TextStyle(
+                    color: isCurrent ? _gold : Colors.white,
+                    fontWeight: isCurrent ? FontWeight.w600 : FontWeight.normal,
+                    fontSize: 14,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -803,20 +903,26 @@ class _MixingConsoleScreenState extends State<MixingConsoleScreen> {
   static const _ch = MethodChannel('cinema.audio.luxe/audio');
 
   final Map<String, double> _fx = {
-    'reverb': 0.25,
-    'bass': 0.0,
-    'volume': 0.0,
-    'delay': 0.15,
-    'spatial': 0.20,
-    'warmth': 0.05,
-    'clarity': 0.0,
+    'reverb':   0.25,
+    'bass':     0.0,
+    'volume':   0.0,
+    'delay':    0.15,
+    'warmth':   0.05,
+    'clarity':  0.0,
     'presence': 0.0,
-    'pitch': 0.5,
+    'pitch':    0.5,
+    'crossfeed': 0.0,
+    'exciter':  0.0,
+    'compress': 0.5,
   };
 
   Future<void> _set(String key, double v) async {
     setState(() => _fx[key] = v);
-    await _ch.invokeMethod('setEffect', {'effect': key, 'value': v});
+    try {
+      await _ch.invokeMethod('setEffect', {'effect': key, 'value': v});
+    } catch (e) {
+      debugPrint('setEffect error: $e');
+    }
   }
 
   @override
@@ -825,7 +931,8 @@ class _MixingConsoleScreenState extends State<MixingConsoleScreen> {
       backgroundColor: _dark,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
-        title: const Text('CONSOLE CINÉMA', style: TextStyle(letterSpacing: 3, fontSize: 14, color: _gold)),
+        title: const Text('CONSOLE CINÉMA',
+            style: TextStyle(letterSpacing: 3, fontSize: 14, color: _gold)),
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(24, 8, 24, 100),
@@ -833,17 +940,20 @@ class _MixingConsoleScreenState extends State<MixingConsoleScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _sectionLabel('🎬 PATHÉ PALACE · DOLBY ATMOS'),
-            _slider('🌊 IMMERSION (REVERB CATHÉDRALE)', 'reverb', '%'),
+            _slider('🌊 IMMERSION (REVERB)', 'reverb', '%'),
             _slider('🔊 SUB-BASS (32–125 Hz)', 'bass', '%'),
             _slider('⏱️ DELAY (ÉCHO SPATIAL)', 'delay', '%'),
-            _slider('🌐 SPATIAL 3D', 'spatial', '%'),
+            _slider('🔀 CROSSFEED STÉRÉO', 'crossfeed', '%'),
             _sectionLabel('🎚️ TONALITÉ'),
             _slider('🔥 WARMTH (CHALEUR ANALOGIQUE)', 'warmth', '%'),
             _slider('💎 CLARITY (2–8 kHz)', 'clarity', '%'),
             _slider('🎤 PRÉSENCE (500–2 kHz)', 'presence', '%'),
+            _slider('✨ EXCITER HARMONIQUE', 'exciter', '%'),
             _pitchSlider(),
+            _sectionLabel('⚙️ DYNAMIQUE'),
+            _slider('🗜️ COMPRESSEUR', 'compress', '%'),
             _sectionLabel('🔈 VOLUME'),
-            _slider('⚡ BOOST VOLUME (+200%)', 'volume', '%'),
+            _slider('⚡ BOOST VOLUME', 'volume', '%'),
           ],
         ),
       ),
@@ -852,19 +962,34 @@ class _MixingConsoleScreenState extends State<MixingConsoleScreen> {
 
   Widget _sectionLabel(String label) => Padding(
         padding: const EdgeInsets.only(top: 24, bottom: 8),
-        child: Text(label, style: const TextStyle(color: _gold, fontSize: 11, letterSpacing: 2, fontWeight: FontWeight.bold)),
+        child: Text(label,
+            style: const TextStyle(
+              color: _gold,
+              fontSize: 11,
+              letterSpacing: 2,
+              fontWeight: FontWeight.bold,
+            )),
       );
 
   Widget _slider(String label, String key, String unit) {
-    final v = _fx[key]!;
+    final v = _fx[key] ?? 0.0;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(label, style: const TextStyle(color: Colors.white70, fontSize: 13)),
-            Text('${(v * 100).toInt()}$unit', style: const TextStyle(color: _gold, fontSize: 12, fontFamily: 'monospace')),
+            Expanded(
+              child: Text(label,
+                  style: const TextStyle(color: Colors.white70, fontSize: 13),
+                  overflow: TextOverflow.ellipsis),
+            ),
+            Text('${(v * 100).toInt()}$unit',
+                style: const TextStyle(
+                  color: _gold,
+                  fontSize: 12,
+                  fontFamily: 'monospace',
+                )),
           ],
         ),
         Slider(value: v, onChanged: (val) => _set(key, val)),
@@ -874,7 +999,7 @@ class _MixingConsoleScreenState extends State<MixingConsoleScreen> {
   }
 
   Widget _pitchSlider() {
-    final v = _fx['pitch']!;
+    final v = _fx['pitch'] ?? 0.5;
     final cents = ((v - 0.5) * 400).toInt();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -883,7 +1008,8 @@ class _MixingConsoleScreenState extends State<MixingConsoleScreen> {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             const Text('🎵 PITCH', style: TextStyle(color: Colors.white70, fontSize: 13)),
-            Text('${cents > 0 ? '+' : ''}$cents ¢', style: const TextStyle(color: _gold, fontSize: 12, fontFamily: 'monospace')),
+            Text('${cents > 0 ? '+' : ''}$cents ¢',
+                style: const TextStyle(color: _gold, fontSize: 12, fontFamily: 'monospace')),
           ],
         ),
         Slider(value: v, onChanged: (val) => _set('pitch', val)),
@@ -893,7 +1019,7 @@ class _MixingConsoleScreenState extends State<MixingConsoleScreen> {
   }
 }
 
-// ─── Bouton doré réutilisable ─────────────────────────────────────────────────
+// ─── Bouton doré ─────────────────────────────────────────────────────────────
 class _GoldButton extends StatelessWidget {
   final String label;
   final VoidCallback onPressed;
@@ -911,7 +1037,8 @@ class _GoldButton extends StatelessWidget {
         elevation: 8,
         shadowColor: _gold.withOpacity(0.4),
       ),
-      child: Text(label, style: const TextStyle(fontSize: 14, letterSpacing: 2, fontWeight: FontWeight.w600)),
+      child: Text(label,
+          style: const TextStyle(fontSize: 14, letterSpacing: 2, fontWeight: FontWeight.w600)),
     );
   }
 }
