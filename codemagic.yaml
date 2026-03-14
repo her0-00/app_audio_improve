@@ -1,0 +1,38 @@
+workflows:
+  ios-build:
+    name: Cinema Audio Luxe iOS Build
+    environment:
+      flutter: stable
+      xcode: latest
+    scripts:
+      - name: Clean Flutter
+        script: |
+          flutter clean
+          rm -rf ios/Pods ios/Podfile.lock ios/.symlinks
+      - name: Install dependencies
+        script: flutter pub get
+      - name: Install CocoaPods
+        script: |
+          cd ios
+          pod install --repo-update
+          # Force iOS 14.0
+          if [ -f Podfile ]; then
+            sed -i '' 's/platform :ios, .*/platform :ios, '\''14.0'\''/' Podfile
+            pod install --repo-update
+          fi
+          cd ..
+      - name: Build iOS app (no signing)
+        script: flutter build ios --release --no-codesign --verbose
+      - name: Package .ipa manually
+        script: |
+          mkdir -p Payload
+          cp -r build/ios/iphoneos/Runner.app Payload/
+          zip -r CinemaAudioLuxe.ipa Payload
+          mkdir -p build/ios/ipa
+          mv CinemaAudioLuxe.ipa build/ios/ipa/
+    artifacts:
+      - build/ios/ipa/*.ipa
+    publishing:
+      email:
+        recipients:
+          - yenamdossou@outlook.fr
