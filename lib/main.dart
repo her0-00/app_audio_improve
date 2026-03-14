@@ -169,7 +169,8 @@ class AudioState extends ChangeNotifier {
         duration: 0,
       );
       _library.addTrack(track);
-      print('✅ Track ajouté: ${track.title}');
+      _library.addToQueue(track);
+      print('✅ Track ajouté et mise en file : ${track.title}');
       addedCount++;
     }
 
