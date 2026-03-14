@@ -25,8 +25,16 @@ workflows:
           flutter build ios --release --no-codesign --verbose
       - name: Package .ipa manually
         script: |
+          set -e
           mkdir -p Payload
-          cp -r build/ios/iphoneos/Runner.app Payload/
+          APP_PATH=$(ls -d build/ios/iphoneos/*.app 2>/dev/null | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: No .app bundle found in build/ios/iphoneos. Listing directory contents:"
+            ls -la build/ios/iphoneos || true
+            exit 1
+          fi
+          echo "Found app bundle: $APP_PATH"
+          cp -r "$APP_PATH" Payload/
           zip -r CinemaAudioLuxe.ipa Payload
           mkdir -p build/ios/ipa
           mv CinemaAudioLuxe.ipa build/ios/ipa/
