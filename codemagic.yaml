@@ -4,25 +4,25 @@ workflows:
     environment:
       flutter: stable
       xcode: latest
+      cocoapods: default
     scripts:
       - name: Clean Flutter
         script: |
           flutter clean
-          rm -rf ios/Pods ios/Podfile.lock ios/.symlinks
+          rm -rf ios/Pods ios/Podfile.lock ios/.symlinks ios/Flutter/Flutter.framework
       - name: Install dependencies
         script: flutter pub get
+      - name: Update CocoaPods repo
+        script: pod repo update
       - name: Install CocoaPods
         script: |
           cd ios
-          pod install --repo-update
-          # Force iOS 14.0
-          if [ -f Podfile ]; then
-            sed -i '' 's/platform :ios, .*/platform :ios, '\''14.0'\''/' Podfile
-            pod install --repo-update
-          fi
+          pod deintegrate || true
+          pod install --repo-update --verbose
           cd ..
       - name: Build iOS app (no signing)
-        script: flutter build ios --release --no-codesign --verbose
+        script: |
+          flutter build ios --release --no-codesign --verbose
       - name: Package .ipa manually
         script: |
           mkdir -p Payload

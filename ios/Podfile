@@ -32,6 +32,10 @@ target 'Runner' do
   use_modular_headers!
 
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+  
+  target 'RunnerTests' do
+    inherit! :search_paths
+  end
 end
 
 post_install do |installer|
@@ -39,29 +43,11 @@ post_install do |installer|
     flutter_additional_ios_build_settings(target)
     target.build_configurations.each do |config|
       config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
-      # Workaround for Xcode 15+ and iOS 17+
-      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= [
-        '$(inherited)',
-        'PERMISSION_CAMERA=1',
-        'PERMISSION_MICROPHONE=1',
-        'PERMISSION_PHOTOS=1',
-      ]
-    end
-  end
-
-  # Add required frameworks to the main target
-  main_target = installer.pods_project.targets.find { |target| target.name == 'Runner' }
-  if main_target
-    main_target.frameworks_build_phase.files_references.each do |file_ref|
-      puts "Existing framework: #{file_ref.display_name}"
-    end
-
-    # Add frameworks programmatically
-    frameworks_to_add = ['AVFoundation', 'MediaPlayer', 'Accelerate']
-    frameworks_to_add.each do |framework_name|
-      framework_ref = installer.pods_project.frameworks_group.new_file("#{framework_name}.framework")
-      main_target.frameworks_build_phase.add_file_reference(framework_ref)
-      puts "Added framework: #{framework_name}"
+      config.build_settings['ENABLE_BITCODE'] = 'NO'
+      # iOS 18 iPhone XR compatibility
+      config.build_settings['CODE_SIGN_IDENTITY'] = ''
+      config.build_settings['CODE_SIGNING_REQUIRED'] = 'NO'
+      config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'
     end
   end
 end
