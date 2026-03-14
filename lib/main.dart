@@ -41,14 +41,53 @@ class AudioState extends ChangeNotifier {
 
   AudioState() {
     _ch.setMethodCallHandler(_onNativeCall);
-    _library.loadLibrary();
+    _initializeState();
+  }
+
+  Future<void> _initializeState() async {
+    await _library.loadLibrary();
+    await _loadAudioSettings();
     _startSpectrumTimer();
-    refreshOutputDevices();
-    _syncInitialState();
+    await refreshOutputDevices();
+    await _syncInitialState();
+  }
+
+  Future<void> _loadAudioSettings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      shuffleEnabled = prefs.getBool('shuffleEnabled') ?? false;
+      repeatMode = prefs.getInt('repeatMode') ?? 0;
+      currentPreset = prefs.getString('currentPreset') ?? 'cinema';
+    } catch (e) {
+      debugPrint('Error loading audio settings: $e');
+    }
+  }
+
+  Future<void> _saveAudioSettings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('shuffleEnabled', shuffleEnabled);
+      await prefs.setInt('repeatMode', repeatMode);
+      await prefs.setString('currentPreset', currentPreset);
+    } catch (e) {
+      debugPrint('Error saving audio settings: $e');
+    }
   }
 
   Future<void> _syncInitialState() async {
     try {
+      // Synchroniser la playlist avec le code natif d'abord
+      if (queue.isNotEmpty) {
+        await _syncPlaylist();
+        // Charger la piste actuelle
+        await _loadCurrent();
+      }
+
+      // Appliquer les paramètres sauvegardés au code natif
+      await _ch.invokeMethod('setShuffle', {'enabled': shuffleEnabled});
+      await _ch.invokeMethod('setRepeat', {'mode': repeatMode});
+      await _ch.invokeMethod('setPreset', {'preset': currentPreset});
+
       // Synchroniser l'index actuel avec le code natif
       final nativeIndex = await _ch.invokeMethod<int>('getCurrentIndex') ?? 0;
       if (nativeIndex >= 0 && nativeIndex < queue.length) {
@@ -401,6 +440,7 @@ class AudioState extends ChangeNotifier {
 
   Future<void> setPreset(String preset) async {
     currentPreset = preset;
+    await _saveAudioSettings();
     try {
       await _ch.invokeMethod('setPreset', {'preset': preset});
     } catch (e) {
@@ -411,6 +451,7 @@ class AudioState extends ChangeNotifier {
 
   Future<void> setShuffle(bool enabled) async {
     shuffleEnabled = enabled;
+    await _saveAudioSettings();
     try {
       await _ch.invokeMethod('setShuffle', {'enabled': enabled});
     } catch (e) {
@@ -421,6 +462,7 @@ class AudioState extends ChangeNotifier {
 
   Future<void> setRepeat(int mode) async {
     repeatMode = mode;
+    await _saveAudioSettings();
     try {
       await _ch.invokeMethod('setRepeat', {'mode': mode});
     } catch (e) {
