@@ -177,12 +177,12 @@ import Accelerate
         kAudioUnitScope_Global, 0, -20, 0)
       AudioUnitSetParameter(au, kDynamicsProcessorParam_HeadRoom,
         kAudioUnitScope_Global, 0, 5, 0)
-      AudioUnitSetParameter(au, kDynamicsProcessorParam_ExpansionRatio,
-        kAudioUnitScope_Global, 0, 4, 0)
       AudioUnitSetParameter(au, kDynamicsProcessorParam_AttackTime,
         kAudioUnitScope_Global, 0, 0.001, 0)
       AudioUnitSetParameter(au, kDynamicsProcessorParam_ReleaseTime,
         kAudioUnitScope_Global, 0, 0.05, 0)
+      AudioUnitSetParameter(au, kDynamicsProcessorParam_MasterGain,
+        kAudioUnitScope_Global, 0, 0, 0)
     }
 
     let format = engine.mainMixerNode.outputFormat(forBus: 0)
