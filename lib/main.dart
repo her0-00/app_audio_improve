@@ -30,6 +30,8 @@ class AudioState extends ChangeNotifier {
   bool shuffleEnabled = false;
   int repeatMode = 0;
   String currentDevice = 'speaker';
+  String selectedOutput = 'default';
+  List<Map<String, String>> availableOutputs = [];
   List<double> spectrumData = List.filled(32, 0.0);
 
   // Messages d'état affichés à l'utilisateur (Import / Erreurs)
@@ -39,6 +41,7 @@ class AudioState extends ChangeNotifier {
     _ch.setMethodCallHandler(_onNativeCall);
     _library.loadLibrary();
     _startSpectrumTimer();
+    refreshOutputDevices();
   }
 
   void _startSpectrumTimer() {
@@ -89,6 +92,40 @@ class AudioState extends ChangeNotifier {
         }
         break;
     }
+  }
+
+  Future<void> refreshOutputDevices() async {
+    try {
+      final result = await _ch.invokeMethod<List>('getOutputDevices');
+      if (result != null) {
+        availableOutputs = result
+            .cast<Map>()
+            .map((m) => {
+                  'portType': m['portType']?.toString() ?? '',
+                  'portName': m['portName']?.toString() ?? '',
+                })
+            .toList();
+      }
+      final current = await _ch.invokeMethod<String>('getAudioDevice');
+      selectedOutput = current ?? selectedOutput;
+    } catch (e) {
+      debugPrint('refreshOutputDevices error: $e');
+    }
+    notifyListeners();
+  }
+
+  Future<bool> setOutputDevice(String portType) async {
+    try {
+      final success = await _ch.invokeMethod<bool>('setOutputDevice', {'portType': portType});
+      if (success == true) {
+        selectedOutput = portType;
+        notifyListeners();
+        return true;
+      }
+    } catch (e) {
+      debugPrint('setOutputDevice error: $e');
+    }
+    return false;
   }
 
   // ── Ajout de fichiers ───────────────────────────────────────────────────────
@@ -718,10 +755,52 @@ class PlayerScreen extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  // Périphérique actif
-                  Text(
-                    '🎧 ${_audio.currentDevice}',
-                    style: const TextStyle(color: Colors.white38, fontSize: 11, letterSpacing: 1),
+                  // Périphérique actif + sélection de sortie
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        '🎧 ${_audio.currentDevice}',
+                        style: const TextStyle(color: Colors.white38, fontSize: 11, letterSpacing: 1),
+                      ),
+                      const SizedBox(width: 8),
+                      TextButton(
+                        onPressed: () async {
+                          await _audio.refreshOutputDevices();
+                          if (!context.mounted) return;
+                          final choice = await showDialog<String>(
+                            context: context,
+                            builder: (dialogContext) {
+                              return SimpleDialog(
+                                title: const Text('Sortie audio'),
+                                children: [
+                                  SimpleDialogOption(
+                                    onPressed: () => Navigator.pop(dialogContext, 'default'),
+                                    child: const Text('Système (automatique)'),
+                                  ),
+                                  ..._audio.availableOutputs.map((o) {
+                                    final name = o['portName'] ?? o['portType'] ?? 'Inconnu';
+                                    final portType = o['portType'] ?? '';
+                                    return SimpleDialogOption(
+                                      onPressed: () => Navigator.pop(dialogContext, portType),
+                                      child: Text(name),
+                                    );
+                                  }),
+                                ],
+                              );
+                            },
+                          );
+                          if (choice != null) {
+                            await _audio.setOutputDevice(choice);
+                          }
+                        },
+                        style: TextButton.styleFrom(
+                          foregroundColor: _gold,
+                          textStyle: const TextStyle(fontSize: 12),
+                        ),
+                        child: const Text('Changer'),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 12),
                   // Titre

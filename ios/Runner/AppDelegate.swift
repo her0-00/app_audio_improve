@@ -94,6 +94,14 @@ import Accelerate
         }
       case "getAudioDevice":
         result(self.getCurrentAudioDevice())
+      case "getOutputDevices":
+        result(self.getAvailableOutputDevices())
+      case "setOutputDevice":
+        if let args = call.arguments as? [String: Any], let portType = args["portType"] as? String {
+          result(self.setOutputDevice(portType: portType))
+        } else {
+          result(false)
+        }
       case "bindDeviceProfile":
         // Appelé depuis Flutter quand l'utilisateur associe un profil à un appareil renommé
         if let args = call.arguments as? [String: Any],
@@ -286,6 +294,32 @@ import Accelerate
       // HDMI, USB, CarPlay, etc.
       if let saved = savedProfile(for: rawName) { return "saved:\(rawName):\(saved)" }
       return "other:\(rawName)"
+    }
+  }
+
+  func getAvailableOutputDevices() -> [[String: String]] {
+    let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
+    return outputs.map { output in
+      [
+        "portType": output.portType.rawValue,
+        "portName": output.portName,
+      ]
+    }
+  }
+
+  func setOutputDevice(portType: String) -> Bool {
+    let session = AVAudioSession.sharedInstance()
+    do {
+      try session.setActive(true)
+      if portType == AVAudioSession.Port.builtInSpeaker.rawValue {
+        try session.overrideOutputAudioPort(.speaker)
+      } else {
+        try session.overrideOutputAudioPort(.none)
+      }
+      return true
+    } catch {
+      print("Failed to set output device: \(error)")
+      return false
     }
   }
 
