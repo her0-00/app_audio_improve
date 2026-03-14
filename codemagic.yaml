@@ -12,24 +12,6 @@ workflows:
           rm -rf ios/Pods ios/Podfile.lock ios/.symlinks
       - name: Install dependencies
         script: flutter pub get
-      - name: Add main.m to Xcode project
-        script: |
-          cd ios
-          if ! grep -q "main.m" Runner.xcodeproj/project.pbxproj; then
-            ruby -i -pe '
-              if $_ =~ /74858FAE1ED2DC5600515810 \/\* AppDelegate.swift \*\/;/
-                $_ += "\t\t99BC51AE1A1A1A1A00111111 /* main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = \"<group>\"; };\n"
-              elsif $_ =~ /74858FAF1ED2DC5600515810 \/\* AppDelegate.swift in Sources \*\/,/
-                $_ += "\t\t\t\t99BC51AF1A1A1A1A00111111 /* main.m in Sources */,\n"
-              elsif $_ =~ /74858FAF1ED2DC5600515810 \/\* AppDelegate.swift in Sources \*\/ = \{isa = PBXBuildFile; fileRef = 74858FAE1ED2DC5600515810/
-                $_ += "\t\t99BC51AF1A1A1A1A00111111 /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 99BC51AE1A1A1A1A00111111 /* main.m */; };\n"
-              end
-            ' Runner.xcodeproj/project.pbxproj
-            echo "main.m added to Xcode project"
-          else
-            echo "main.m already in project"
-          fi
-          cd ..
       - name: Update CocoaPods repo
         script: pod repo update
       - name: Install CocoaPods

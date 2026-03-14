@@ -4,6 +4,7 @@ import AVFoundation
 import MediaPlayer
 import Accelerate
 
+@UIApplicationMain
 @objc class AppDelegate: FlutterAppDelegate {
   private var audioEngine: AVAudioEngine?
   private var player: AVAudioPlayerNode?
