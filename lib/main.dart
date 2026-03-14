@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'dart:async';
+import 'dart:io';
 import 'audio_library.dart';
 import 'models.dart';
 
@@ -90,22 +91,48 @@ class AudioState extends ChangeNotifier {
       allowMultiple: true,
     );
     if (result == null) return;
+
+    int addedCount = 0;
     for (final f in result.files) {
       if (f.path != null) {
-        final track = AudioTrack(
-          id: DateTime.now().millisecondsSinceEpoch.toString() + f.name,
-          path: f.path!,
-          title: f.name.split('.').first,
-          duration: 0, // Will be set when loaded
-        );
-        _library.addTrack(track);
+        try {
+          // Vérifier que le fichier existe et est accessible
+          final file = File(f.path!);
+          if (!await file.exists()) {
+            print('File does not exist: ${f.path}');
+            continue;
+          }
+
+          final track = AudioTrack(
+            id: DateTime.now().millisecondsSinceEpoch.toString() + f.name,
+            path: f.path!,
+            title: f.name.split('.').first,
+            duration: 0, // Will be set when loaded
+          );
+          _library.addTrack(track);
+          addedCount++;
+        } catch (e) {
+          print('Error adding file ${f.name}: $e');
+          // Continue with other files
+        }
       }
     }
-    if (queue.isNotEmpty && current == null) {
-      await _loadCurrent();
-    } else {
-      await _syncPlaylist();
+
+    if (addedCount > 0) {
+      try {
+        if (queue.isNotEmpty && current == null) {
+          await _loadCurrent();
+        } else {
+          await _syncPlaylist();
+        }
+      } catch (e) {
+        print('Error loading audio after adding files: $e');
+        // Reset to safe state
+        isPlaying = false;
+        position = 0;
+      }
     }
+
     notifyListeners();
   }
 
@@ -117,52 +144,80 @@ class AudioState extends ChangeNotifier {
 
   Future<void> _loadCurrent() async {
     if (queue.isEmpty) return;
-    await _ch.invokeMethod('loadAudio', {'path': current!.path});
-    final dur = await _ch.invokeMethod<double>('getDuration') ?? 1.0;
-    // Update duration in library
-    if (current != null) {
-      final updated = current!.copyWith(duration: dur);
-      _library.updateTrack(updated);
+    try {
+      await _ch.invokeMethod('loadAudio', {'path': current!.path});
+      final dur = await _ch.invokeMethod<double>('getDuration') ?? 1.0;
+      // Update duration in library
+      if (current != null) {
+        final updated = current!.copyWith(duration: dur);
+        _library.updateTrack(updated);
+      }
+      position = 0;
+    } catch (e) {
+      print('Error loading current track: $e');
+      // Skip this track and try next one
+      if (_library.hasNext()) {
+        _library.next();
+        await _loadCurrent();
+      }
     }
-    position = 0;
     notifyListeners();
   }
 
   Future<void> _syncPlaylist() async {
-    await _ch.invokeMethod('loadPlaylist', {
-      'paths': queue.map((t) => t.path).toList(),
-      'index': currentIndex,
-    });
-    final dur = await _ch.invokeMethod<double>('getDuration') ?? 1.0;
-    if (current != null) {
-      final updated = current!.copyWith(duration: dur);
-      _library.updateTrack(updated);
+    try {
+      await _ch.invokeMethod('loadPlaylist', {
+        'paths': queue.map((t) => t.path).toList(),
+        'index': currentIndex,
+      });
+      final dur = await _ch.invokeMethod<double>('getDuration') ?? 1.0;
+      if (current != null) {
+        final updated = current!.copyWith(duration: dur);
+        _library.updateTrack(updated);
+      }
+      position = 0;
+    } catch (e) {
+      print('Error syncing playlist: $e');
+      // Try to load current track individually
+      await _loadCurrent();
     }
-    position = 0;
     notifyListeners();
   }
 
   Future<void> play() async {
     if (queue.isEmpty) return;
     if (current == null) await _loadCurrent();
-    await _ch.invokeMethod('play');
-    isPlaying = true;
-    _startTimer();
+    try {
+      await _ch.invokeMethod('play');
+      isPlaying = true;
+      _startTimer();
+    } catch (e) {
+      print('Error playing: $e');
+      isPlaying = false;
+    }
     notifyListeners();
   }
 
   Future<void> pause() async {
-    await _ch.invokeMethod('pause');
-    isPlaying = false;
-    _posTimer?.cancel();
+    try {
+      await _ch.invokeMethod('pause');
+      isPlaying = false;
+      _posTimer?.cancel();
+    } catch (e) {
+      print('Error pausing: $e');
+    }
     notifyListeners();
   }
 
   Future<void> togglePlay() async => isPlaying ? pause() : play();
 
   Future<void> seek(double pos) async {
-    await _ch.invokeMethod('seek', {'position': pos});
-    position = pos;
+    try {
+      await _ch.invokeMethod('seek', {'position': pos});
+      position = pos;
+    } catch (e) {
+      print('Error seeking: $e');
+    }
     notifyListeners();
   }
 
