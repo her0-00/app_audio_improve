@@ -428,11 +428,19 @@ import Accelerate
   // MARK: - Playback
 
   func loadAudio(path: String) {
+    guard FileManager.default.fileExists(atPath: path) else {
+      print("⚠️ loadAudio: file not found at path: \(path)")
+      return
+    }
+
     if audioEngine == nil { setupAudioEngine() }
+
     do {
       audioFile = try AVAudioFile(forReading: URL(fileURLWithPath: path))
       seekFrameOffset = 0; lastSeekTime = 0; player?.stop()
-    } catch { print("Load error: \(error)") }
+    } catch {
+      print("❌ Load error: \(error)")
+    }
   }
 
   func loadPlaylist(paths: [String], index: Int) {
@@ -452,13 +460,22 @@ import Accelerate
   }
 
   func play() {
-    guard let file = audioFile else { return }
+    guard let file = audioFile else {
+      print("⚠️ play(): no audio loaded")
+      return
+    }
     if audioEngine == nil || !isEngineRunning { setupAudioEngine() }
-    guard let player = player, isEngineRunning else { return }
+    guard let player = player, isEngineRunning else {
+      print("⚠️ play(): audio engine not ready")
+      return
+    }
     player.stop()
     let startFrame = seekFrameOffset
     let remaining  = file.length - startFrame
-    guard remaining > 0 else { return }
+    guard remaining > 0 else {
+      print("⚠️ play(): nothing remaining to play")
+      return
+    }
     player.scheduleSegment(file, startingFrame: startFrame,
       frameCount: AVAudioFrameCount(remaining), at: nil) { [weak self] in
       DispatchQueue.main.async { self?.onTrackFinished() }
@@ -467,9 +484,21 @@ import Accelerate
   }
 
   func pause() {
+    guard isPlaying else {
+      print("⚠️ pause(): not currently playing")
+      return
+    }
+
     lastSeekTime    = getPosition()
     seekFrameOffset = AVAudioFramePosition(lastSeekTime * (audioFile?.processingFormat.sampleRate ?? 44100))
-    player?.pause(); isPlaying = false; updateNowPlaying()
+    if let player = player {
+      player.pause()
+    } else {
+      print("⚠️ pause(): player nil")
+    }
+
+    isPlaying = false
+    updateNowPlaying()
   }
 
   func seek(to position: Double) {
@@ -527,7 +556,10 @@ import Accelerate
   }
 
   private func nextIndex() -> Int? {
-    guard !playlist.isEmpty else { return nil }
+    guard !playlist.isEmpty else {
+      print("⚠️ nextIndex(): playlist empty")
+      return nil
+    }
 
     if shuffleEnabled {
       // Reconstruire l'ordre shuffle si nécessaire
@@ -535,7 +567,10 @@ import Accelerate
         buildShuffleOrder()
       }
 
-      guard !shuffledIndices.isEmpty else { return nil }
+      guard !shuffledIndices.isEmpty else {
+        print("⚠️ nextIndex(): shuffle list empty")
+        return nil
+      }
 
       shufflePosition += 1
       if shufflePosition >= shuffledIndices.count {
@@ -543,12 +578,14 @@ import Accelerate
           buildShuffleOrder()
           return shuffledIndices.first
         }
+        print("⚠️ nextIndex(): reached end (no repeat)")
         return nil
       }
       return shuffledIndices[shufflePosition]
     } else {
       let next = currentIndex + 1
       if next >= playlist.count {
+        print("⚠️ nextIndex(): reached end of playlist")
         return repeatMode == 1 ? 0 : nil
       }
       return next
