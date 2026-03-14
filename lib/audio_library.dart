@@ -20,12 +20,15 @@ class AudioLibrary {
 
   Future<void> loadLibrary() async {
     final prefs = await SharedPreferences.getInstance();
-    
+
     // Charger les pistes
     final tracksJson = prefs.getString('tracks');
     if (tracksJson != null) {
       final List<dynamic> decoded = jsonDecode(tracksJson);
       _tracks = decoded.map((t) => AudioTrack.fromJson(t)).toList();
+      print('📚 Loaded ${_tracks.length} tracks');
+    } else {
+      print('📚 No tracks saved');
     }
 
     // Charger les playlists
@@ -33,6 +36,7 @@ class AudioLibrary {
     if (playlistsJson != null) {
       final List<dynamic> decoded = jsonDecode(playlistsJson);
       _playlists = decoded.map((p) => Playlist.fromJson(p)).toList();
+      print('📋 Loaded ${_playlists.length} playlists');
     }
 
     // Charger la file d'attente
@@ -40,9 +44,16 @@ class AudioLibrary {
     if (queueJson != null) {
       final List<dynamic> decoded = jsonDecode(queueJson);
       _queue = decoded.map((t) => AudioTrack.fromJson(t)).toList();
+      print('🎵 Loaded ${_queue.length} tracks in queue');
+      for (int i = 0; i < _queue.length; i++) {
+        print('  $i: ${_queue[i].title} - ${_queue[i].path}');
+      }
+    } else {
+      print('🎵 No queue saved');
     }
 
     _currentIndex = prefs.getInt('currentIndex') ?? 0;
+    print('📍 Current index: $_currentIndex');
   }
 
   Future<void> saveLibrary() async {

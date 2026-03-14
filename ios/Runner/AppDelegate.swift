@@ -436,9 +436,19 @@ import Accelerate
   }
 
   func loadPlaylist(paths: [String], index: Int) {
-    playlist = paths; currentIndex = index
+    guard !paths.isEmpty, index >= 0, index < paths.count else {
+      playlist = []
+      currentIndex = 0
+      return
+    }
+
+    playlist = paths
+    currentIndex = index
     loadAudio(path: paths[index])
-    if shuffleEnabled { buildShuffleOrder() }
+
+    if shuffleEnabled && !paths.isEmpty {
+      buildShuffleOrder()
+    }
   }
 
   func play() {
@@ -495,6 +505,11 @@ import Accelerate
   // MARK: - Shuffle
 
   private func buildShuffleOrder() {
+    guard !playlist.isEmpty else {
+      shuffledIndices = []
+      shufflePosition = 0
+      return
+    }
     shuffledIndices = Array(0..<playlist.count).shuffled()
     if let pos = shuffledIndices.firstIndex(of: currentIndex) {
       shuffledIndices.swapAt(0, pos); shufflePosition = 0
@@ -503,29 +518,61 @@ import Accelerate
 
   func setShuffle(_ enabled: Bool) {
     shuffleEnabled = enabled
-    if enabled { buildShuffleOrder() }
+    if enabled && !playlist.isEmpty {
+      buildShuffleOrder()
+    } else if !enabled {
+      shufflePosition = 0
+      shuffledIndices = []
+    }
   }
 
   private func nextIndex() -> Int? {
+    guard !playlist.isEmpty else { return nil }
+
     if shuffleEnabled {
+      // Reconstruire l'ordre shuffle si nécessaire
+      if shuffledIndices.isEmpty || shuffledIndices.count != playlist.count {
+        buildShuffleOrder()
+      }
+
+      guard !shuffledIndices.isEmpty else { return nil }
+
       shufflePosition += 1
       if shufflePosition >= shuffledIndices.count {
-        if repeatMode == 1 { buildShuffleOrder(); return shuffledIndices[0] }
+        if repeatMode == 1 {
+          buildShuffleOrder()
+          return shuffledIndices.first
+        }
         return nil
       }
       return shuffledIndices[shufflePosition]
     } else {
       let next = currentIndex + 1
-      if next >= playlist.count { return repeatMode == 1 ? 0 : nil }
+      if next >= playlist.count {
+        return repeatMode == 1 ? 0 : nil
+      }
       return next
     }
   }
 
   private func onTrackFinished() {
+    guard !playlist.isEmpty else {
+      channel?.invokeMethod("onTrackFinished", arguments: nil)
+      return
+    }
+
     isPlaying = false
-    if repeatMode == 2 { seek(to: 0); play(); return }
+
+    if repeatMode == 2 {
+      seek(to: 0)
+      play()
+      return
+    }
+
     if let next = nextIndex() {
-      currentIndex = next; loadAudio(path: playlist[currentIndex]); play()
+      currentIndex = next
+      loadAudio(path: playlist[currentIndex])
+      play()
       channel?.invokeMethod("onTrackChanged", arguments: ["index": currentIndex])
     } else {
       channel?.invokeMethod("onTrackFinished", arguments: nil)
@@ -534,20 +581,43 @@ import Accelerate
 
   func playNext() {
     guard !playlist.isEmpty else { return }
+
     if let next = nextIndex() {
-      currentIndex = next; loadAudio(path: playlist[currentIndex]); play()
+      currentIndex = next
+      loadAudio(path: playlist[currentIndex])
+      play()
       channel?.invokeMethod("onTrackChanged", arguments: ["index": currentIndex])
     }
   }
 
   func playPrevious() {
+    guard !playlist.isEmpty else { return }
+
     if getPosition() > 3 { seek(to: 0); return }
+
     if shuffleEnabled {
-      if shufflePosition > 0 { shufflePosition -= 1; currentIndex = shuffledIndices[shufflePosition] }
+      // Reconstruire l'ordre shuffle si nécessaire
+      if shuffledIndices.isEmpty || shuffledIndices.count != playlist.count {
+        buildShuffleOrder()
+      }
+
+      if shufflePosition > 0 {
+        shufflePosition -= 1
+        currentIndex = shuffledIndices[shufflePosition]
+      } else {
+        // Si on est au début, aller à la fin de l'ordre shuffle
+        shufflePosition = shuffledIndices.count - 1
+        currentIndex = shuffledIndices[shufflePosition]
+      }
     } else {
       guard currentIndex > 0 else { seek(to: 0); return }
       currentIndex -= 1
     }
+
+    loadAudio(path: playlist[currentIndex])
+    play()
+    channel?.invokeMethod("onTrackChanged", arguments: ["index": currentIndex])
+  }
     loadAudio(path: playlist[currentIndex]); play()
     channel?.invokeMethod("onTrackChanged", arguments: ["index": currentIndex])
   }

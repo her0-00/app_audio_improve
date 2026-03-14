@@ -76,35 +76,107 @@ class AudioState extends ChangeNotifier {
 
   Future<void> _syncInitialState() async {
     try {
-      // Synchroniser la playlist avec le code natif d'abord
-      if (queue.isNotEmpty) {
-        await _syncPlaylist();
-        // Charger la piste actuelle
-        await _loadCurrent();
+      print('🔄 Starting initial state sync...');
+      print('📋 Queue length: ${queue.length}');
+
+      // Identifier les pistes valides et manquantes
+      final validTracks = <AudioTrack>[];
+      final missingTracks = <AudioTrack>[];
+
+      for (final track in queue) {
+        final file = File(track.path);
+        final exists = await file.exists();
+        if (exists) {
+          validTracks.add(track);
+          print('✅ Track exists: ${track.title}');
+        } else {
+          missingTracks.add(track);
+          print('❌ Track missing: ${track.title} - ${track.path}');
+        }
+      }
+
+      if (missingTracks.isNotEmpty) {
+        print('⚠️ Found ${missingTracks.length} missing tracks');
+        importStatus = '${missingTracks.length} piste(s) manquante(s) - Réimportez les fichiers';
+        notifyListeners();
+      }
+
+      // Synchroniser seulement les pistes valides avec le code natif
+      if (validTracks.isNotEmpty) {
+        print('📤 Syncing playlist with ${validTracks.length} valid tracks...');
+
+        // Envoyer seulement les pistes valides au code natif
+        try {
+          final validPaths = validTracks.map((t) => t.path).toList();
+          print('📂 Valid paths: $validPaths');
+          await _ch.invokeMethod('loadPlaylist', {
+            'paths': validPaths,
+            'index': 0, // Commencer par la première piste valide
+          });
+          print('✅ Valid playlist synced with native code');
+        } catch (e) {
+          print('❌ Error syncing valid playlist: $e');
+        }
+
+        // Charger la première piste valide
+        print('🎵 Loading first valid track...');
+        // Créer temporairement une queue avec seulement les pistes valides pour le chargement
+        final tempCurrent = validTracks.first;
+        try {
+          await _ch.invokeMethod('loadAudio', {'path': tempCurrent.path});
+          print('✅ First valid track loaded');
+
+          // Récupérer la durée
+          final dur = await _ch.invokeMethod<double>('getDuration') ?? 0.0;
+          print('⏱️ Duration: $dur');
+          if (dur > 0) {
+            _library.updateTrack(tempCurrent.copyWith(duration: dur));
+          }
+        } catch (e) {
+          print('❌ Error loading first valid track: $e');
+        }
+
+        position = 0;
+      } else {
+        print('⚠️ No valid tracks found');
+        importStatus = 'Aucune piste valide trouvée - Importez des fichiers audio';
+        notifyListeners();
       }
 
       // Appliquer les paramètres sauvegardés au code natif
+      print('⚙️ Applying saved settings...');
       await _ch.invokeMethod('setShuffle', {'enabled': shuffleEnabled});
       await _ch.invokeMethod('setRepeat', {'mode': repeatMode});
       await _ch.invokeMethod('setPreset', {'preset': currentPreset});
+      print('✅ Settings applied');
 
-      // Synchroniser l'index actuel avec le code natif
-      final nativeIndex = await _ch.invokeMethod<int>('getCurrentIndex') ?? 0;
-      if (nativeIndex >= 0 && nativeIndex < queue.length) {
-        _library.jumpTo(nativeIndex);
-      }
+      // Nettoyer les pistes manquantes
+      await _cleanupMissingTracks();
 
-      // Synchroniser l'état de lecture
-      final isPlayingNative = await _ch.invokeMethod<bool>('isPlaying') ?? false;
-      isPlaying = isPlayingNative;
-
-      // Synchroniser la position
-      final nativePosition = await _ch.invokeMethod<double>('getPosition') ?? 0.0;
-      position = nativePosition;
-
+      print('🎉 Initial state sync completed');
       notifyListeners();
     } catch (e) {
+      print('❌ Error syncing initial state: $e');
       debugPrint('Error syncing initial state: $e');
+    }
+  }
+
+  /// Nettoie les pistes manquantes de la bibliothèque
+  Future<void> _cleanupMissingTracks() async {
+    print('🧹 Cleaning up missing tracks...');
+    final initialCount = queue.length;
+    final validTracks = queue.where((track) => File(track.path).existsSync()).toList();
+
+    if (validTracks.length < initialCount) {
+      print('🗑️ Removing ${initialCount - validTracks.length} missing tracks');
+      _library.clearQueue();
+      for (final track in validTracks) {
+        _library.addTrack(track);
+      }
+      await _library.saveLibrary();
+      print('✅ Cleanup completed. ${validTracks.length} tracks remaining.');
+    } else {
+      print('✅ No missing tracks found');
     }
   }
 
@@ -311,12 +383,73 @@ class AudioState extends ChangeNotifier {
 
 
   Future<void> playIndex(int index) async {
+    // Vérifier si la piste demandée existe
+    if (index < 0 || index >= queue.length) {
+      print('❌ Invalid index: $index');
+      return;
+    }
+
+    final track = queue[index];
+    final file = File(track.path);
+    final exists = await file.exists();
+
+    if (!exists) {
+      print('❌ Track file missing: ${track.title}');
+      // Trouver la prochaine piste valide
+      for (int i = index + 1; i < queue.length; i++) {
+        final nextTrack = queue[i];
+        final nextFile = File(nextTrack.path);
+        if (await nextFile.exists()) {
+          print('✅ Found next valid track at index $i: ${nextTrack.title}');
+          _library.jumpTo(i);
+          await _playValidTrack();
+          return;
+        }
+      }
+      // Si aucune piste valide trouvée après, chercher avant
+      for (int i = index - 1; i >= 0; i--) {
+        final prevTrack = queue[i];
+        final prevFile = File(prevTrack.path);
+        if (await prevFile.exists()) {
+          print('✅ Found previous valid track at index $i: ${prevTrack.title}');
+          _library.jumpTo(i);
+          await _playValidTrack();
+          return;
+        }
+      }
+      // Aucune piste valide trouvée
+      print('❌ No valid tracks found');
+      importStatus = 'Aucune piste jouable trouvée - Réimportez des fichiers';
+      notifyListeners();
+      return;
+    }
+
+    // La piste existe, la jouer
     _library.jumpTo(index);
+    await _playValidTrack();
+  }
+
+  Future<void> _playValidTrack() async {
     try {
-      await _syncPlaylist();
-      await play();
+      // Synchroniser seulement la piste actuelle avec le code natif
+      final currentTrack = this.current;
+      if (currentTrack == null) return;
+
+      await _ch.invokeMethod('loadAudio', {'path': currentTrack.path});
+      await _ch.invokeMethod('play');
+
+      // Récupérer la durée
+      final dur = await _ch.invokeMethod<double>('getDuration') ?? 0.0;
+      if (dur > 0) {
+        _library.updateTrack(currentTrack.copyWith(duration: dur));
+      }
+
+      isPlaying = true;
+      position = 0;
+      notifyListeners();
     } catch (e) {
-      debugPrint('playIndex error: $e');
+      print('❌ Error playing valid track: $e');
+      debugPrint('play error: $e');
       isPlaying = false;
       notifyListeners();
     }
@@ -324,10 +457,16 @@ class AudioState extends ChangeNotifier {
 
   // CORRECTION : getDuration retourne 0.0 en cas d'erreur, jamais d'exception
   Future<void> _loadCurrent() async {
-    if (queue.isEmpty || current == null) return;
+    if (queue.isEmpty || current == null) {
+      print('⚠️ Cannot load current: queue empty or no current track');
+      return;
+    }
+    print('🎵 Loading current track: ${current!.title} at ${current!.path}');
     try {
       await _ch.invokeMethod('loadAudio', {'path': current!.path});
+      print('✅ loadAudio successful');
     } catch (e) {
+      print('❌ loadAudio error: $e');
       debugPrint('loadAudio error: $e');
       // Si le fichier ne se charge pas, on skip au suivant
       if (_library.hasNext()) {
@@ -339,10 +478,12 @@ class AudioState extends ChangeNotifier {
 
     try {
       final dur = await _ch.invokeMethod<double>('getDuration') ?? 0.0;
+      print('⏱️ Duration: $dur');
       if (dur > 0 && current != null) {
         _library.updateTrack(current!.copyWith(duration: dur));
       }
     } catch (e) {
+      print('❌ getDuration error: $e');
       debugPrint('getDuration error: $e'); // Non bloquant
     }
     position = 0;
@@ -353,11 +494,16 @@ class AudioState extends ChangeNotifier {
   Future<void> _syncPlaylist() async {
     if (queue.isEmpty) return;
     try {
+      print('📤 Calling loadPlaylist with ${queue.length} tracks');
+      final paths = queue.map((t) => t.path).toList();
+      print('📂 Paths: $paths');
       await _ch.invokeMethod('loadPlaylist', {
-        'paths': queue.map((t) => t.path).toList(),
+        'paths': paths,
         'index': currentIndex,
       });
+      print('✅ loadPlaylist completed');
     } catch (e) {
+      print('❌ loadPlaylist error: $e');
       debugPrint('loadPlaylist error: $e');
       // Fallback sur loadAudio simple
       await _loadCurrent();
@@ -366,10 +512,12 @@ class AudioState extends ChangeNotifier {
 
     try {
       final dur = await _ch.invokeMethod<double>('getDuration') ?? 0.0;
+      print('⏱️ Duration received: $dur');
       if (dur > 0 && current != null) {
         _library.updateTrack(current!.copyWith(duration: dur));
       }
     } catch (e) {
+      print('❌ getDuration error: $e');
       debugPrint('getDuration error: $e'); // Non bloquant
     }
     position = 0;
@@ -450,6 +598,12 @@ class AudioState extends ChangeNotifier {
   }
 
   Future<void> setShuffle(bool enabled) async {
+    if (enabled && queue.isEmpty) {
+      importStatus = 'Importez des fichiers audio avant d\'activer le mode aléatoire';
+      notifyListeners();
+      return;
+    }
+
     shuffleEnabled = enabled;
     await _saveAudioSettings();
     try {
@@ -461,6 +615,12 @@ class AudioState extends ChangeNotifier {
   }
 
   Future<void> setRepeat(int mode) async {
+    if (mode > 0 && queue.isEmpty) {
+      importStatus = 'Importez des fichiers audio avant d\'activer la répétition';
+      notifyListeners();
+      return;
+    }
+
     repeatMode = mode;
     await _saveAudioSettings();
     try {
@@ -1012,7 +1172,9 @@ class PlayerScreen extends StatelessWidget {
                           _audio.shuffleEnabled ? Icons.shuffle : Icons.shuffle_outlined,
                           color: _audio.shuffleEnabled ? _gold : Colors.white54,
                         ),
-                        onPressed: () => _audio.setShuffle(!_audio.shuffleEnabled),
+                        onPressed: _audio.queue.isNotEmpty
+                            ? () => _audio.setShuffle(!_audio.shuffleEnabled)
+                            : null,
                       ),
                       const SizedBox(width: 20),
                       IconButton(
@@ -1020,7 +1182,9 @@ class PlayerScreen extends StatelessWidget {
                           _audio.repeatMode == 2 ? Icons.repeat_one : Icons.repeat,
                           color: _audio.repeatMode > 0 ? _gold : Colors.white54,
                         ),
-                        onPressed: () => _audio.setRepeat((_audio.repeatMode + 1) % 3),
+                        onPressed: _audio.queue.isNotEmpty
+                            ? () => _audio.setRepeat((_audio.repeatMode + 1) % 3)
+                            : null,
                       ),
                     ],
                   ),
@@ -1079,6 +1243,22 @@ class QueueScreen extends StatelessWidget {
             style: TextStyle(letterSpacing: 3, fontSize: 14, color: _gold)),
         actions: [
           TextButton.icon(
+            onPressed: () async {
+              await _audio._cleanupMissingTracks();
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Pistes manquantes nettoyées'),
+                    duration: Duration(seconds: 2),
+                  ),
+                );
+              }
+            },
+            icon: const Icon(Icons.cleaning_services, color: Colors.orange, size: 18),
+            label: const Text('NETTOYER',
+                style: TextStyle(color: Colors.orange, fontSize: 11, letterSpacing: 1)),
+          ),
+          TextButton.icon(
             onPressed: _audio.addFiles,
             icon: const Icon(Icons.add, color: _gold, size: 18),
             label: const Text('AJOUTER',
@@ -1105,21 +1285,33 @@ class QueueScreen extends StatelessWidget {
             itemBuilder: (_, i) {
               final t = _audio.queue[i];
               final isCurrent = i == _audio.currentIndex;
+
+              // Vérifier si le fichier existe (on pourrait mettre ça en cache pour éviter les appels répétés)
+              final fileExists = File(t.path).existsSync();
+              final isMissing = !fileExists;
+
               return ListTile(
                 key: ValueKey(t.id),
                 leading: isCurrent
                     ? const Icon(Icons.equalizer, color: _gold)
-                    : Text('${i + 1}',
-                        style: const TextStyle(color: Colors.white38, fontSize: 13)),
+                    : isMissing
+                        ? const Icon(Icons.error_outline, color: Colors.red)
+                        : Text('${i + 1}',
+                            style: const TextStyle(color: Colors.white38, fontSize: 13)),
                 title: Text(
                   t.title,
                   style: TextStyle(
-                    color: isCurrent ? _gold : Colors.white,
+                    color: isCurrent ? _gold : isMissing ? Colors.red : Colors.white,
                     fontWeight: isCurrent ? FontWeight.w600 : FontWeight.normal,
                     fontSize: 14,
+                    decoration: isMissing ? TextDecoration.lineThrough : null,
                   ),
                   overflow: TextOverflow.ellipsis,
                 ),
+                subtitle: isMissing
+                    ? const Text('Fichier manquant - Réimportez',
+                        style: TextStyle(color: Colors.red, fontSize: 10))
+                    : null,
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
