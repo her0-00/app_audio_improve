@@ -618,9 +618,6 @@ import Accelerate
     play()
     channel?.invokeMethod("onTrackChanged", arguments: ["index": currentIndex])
   }
-    loadAudio(path: playlist[currentIndex]); play()
-    channel?.invokeMethod("onTrackChanged", arguments: ["index": currentIndex])
-  }
 
   // MARK: - Effects
 
