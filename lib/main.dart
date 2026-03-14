@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import 'dart:async';
 import 'dart:io';
 import 'audio_library.dart';
@@ -30,6 +31,9 @@ class AudioState extends ChangeNotifier {
   int repeatMode = 0;
   String currentDevice = 'speaker';
   List<double> spectrumData = List.filled(32, 0.0);
+
+  // Messages d'état affichés à l'utilisateur (Import / Erreurs)
+  String importStatus = '';
 
   AudioState() {
     _ch.setMethodCallHandler(_onNativeCall);
@@ -92,7 +96,9 @@ class AudioState extends ChangeNotifier {
   // try/catch pour éviter qu'une erreur sur un seul fichier ferme l'app.
 
   Future<void> addFiles() async {
-    print('🎵 addFiles: Début');
+    importStatus = 'Sélecteur de fichiers ouvert…';
+    notifyListeners();
+
     FilePickerResult? result;
     try {
       result = await FilePicker.platform.pickFiles(
@@ -100,43 +106,66 @@ class AudioState extends ChangeNotifier {
         allowedExtensions: ['mp3', 'wav', 'flac', 'm4a', 'aac', 'ogg', 'opus'],
         allowMultiple: true,
       );
-      print('🎵 FilePicker result: ${result?.files.length ?? 0} fichiers');
+      importStatus = 'Sélection : ${result?.files.length ?? 0} fichier(s)';
+      notifyListeners();
     } catch (e) {
-      print('❌ FilePicker error: $e');
+      importStatus = 'Erreur FilePicker : $e';
+      notifyListeners();
       return;
     }
     if (result == null) {
-      print('⚠️ FilePicker annulé');
+      importStatus = 'Import annulé';
+      notifyListeners();
       return;
     }
+
+    final docsDir = await getApplicationDocumentsDirectory();
+    final mediaDir = Directory('${docsDir.path}/Media');
+    if (!await mediaDir.exists()) await mediaDir.create(recursive: true);
 
     int addedCount = 0;
     for (final f in result.files) {
       final path = f.path;
-      print('📁 Fichier: ${f.name}, path: $path');
+      final originalName = f.name;
+      print('📁 Fichier importé: $originalName, path: $path');
       if (path == null) {
-        print('⚠️ Path null pour ${f.name}');
+        print('⚠️ Path null pour $originalName');
         continue;
       }
 
+      final sourceFile = File(path);
+      if (!await sourceFile.exists()) {
+        print('❌ Fichier introuvable: $path');
+        continue;
+      }
+
+      // Copie le fichier dans le répertoire Documents/Media de l'application.
+      // Cela permet de s'assurer qu'il est conservé et accessible même après
+      // que le fichier d'origine ait été supprimé ou désactivé par iOS.
+      String fileName = sourceFile.uri.pathSegments.last;
+      final extIndex = fileName.lastIndexOf('.');
+      final baseName = extIndex > 0 ? fileName.substring(0, extIndex) : fileName;
+      final ext = extIndex > 0 ? fileName.substring(extIndex) : '';
+
+      String destPath = '${mediaDir.path}/$fileName';
+      int counter = 1;
+      while (await File(destPath).exists()) {
+        destPath = '${mediaDir.path}/${baseName}_$counter$ext';
+        counter++;
+      }
+
       try {
-        final file = File(path);
-        if (!await file.exists()) {
-          print('❌ Fichier introuvable: $path');
-          continue;
-        }
-        print('✅ Fichier existe: ${await file.length()} bytes');
+        await sourceFile.copy(destPath);
+        print('✅ Copie réussie dans app: $destPath');
       } catch (e) {
-        print('❌ Erreur accès fichier $path: $e');
+        print('❌ Échec copie: $e');
         continue;
       }
 
       final track = AudioTrack(
-        id: '${DateTime.now().microsecondsSinceEpoch}_${f.name}',
-        path: path,
-        title: f.name.contains('.')
-            ? f.name.substring(0, f.name.lastIndexOf('.'))
-            : f.name,
+        id: '${DateTime.now().microsecondsSinceEpoch}_$fileName',
+        path: destPath,
+        title: baseName,
         duration: 0,
       );
       _library.addTrack(track);
@@ -144,11 +173,12 @@ class AudioState extends ChangeNotifier {
       addedCount++;
     }
 
-    print('📊 Total ajouté: $addedCount pistes');
-    print('📊 Queue size: ${_library.queue.length}');
+    importStatus = 'Total ajouté : $addedCount piste(s)';
+    notifyListeners();
 
     if (addedCount == 0) {
-      print('⚠️ Aucune piste ajoutée');
+      importStatus = 'Aucune piste importée (vérifiez les permissions)';
+      notifyListeners();
       return;
     }
 
@@ -170,6 +200,7 @@ class AudioState extends ChangeNotifier {
     print('🔔 notifyListeners');
     notifyListeners();
   }
+
 
   Future<void> playIndex(int index) async {
     _library.jumpTo(index);
@@ -601,6 +632,11 @@ class ImportScreen extends StatelessWidget {
                   listenable: _audio,
                   builder: (_, __) => Column(
                     children: [
+                      if (_audio.importStatus.isNotEmpty)
+                        Text(_audio.importStatus,
+                            style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                      if (_audio.importStatus.isNotEmpty)
+                        const SizedBox(height: 8),
                       if (_audio.queue.isNotEmpty)
                         Text('${_audio.queue.length} piste(s) chargée(s)',
                             style: const TextStyle(color: Colors.white54, fontSize: 13)),
