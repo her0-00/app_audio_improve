@@ -48,4 +48,20 @@ post_install do |installer|
       ]
     end
   end
+
+  # Add required frameworks to the main target
+  main_target = installer.pods_project.targets.find { |target| target.name == 'Runner' }
+  if main_target
+    main_target.frameworks_build_phase.files_references.each do |file_ref|
+      puts "Existing framework: #{file_ref.display_name}"
+    end
+
+    # Add frameworks programmatically
+    frameworks_to_add = ['AVFoundation', 'MediaPlayer', 'Accelerate']
+    frameworks_to_add.each do |framework_name|
+      framework_ref = installer.pods_project.frameworks_group.new_file("#{framework_name}.framework")
+      main_target.frameworks_build_phase.add_file_reference(framework_ref)
+      puts "Added framework: #{framework_name}"
+    end
+  end
 end
