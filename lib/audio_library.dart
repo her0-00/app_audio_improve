@@ -70,11 +70,23 @@ class AudioLibrary {
   }
 
   void updateTrack(AudioTrack updatedTrack) {
-    final index = _tracks.indexWhere((t) => t.id == updatedTrack.id);
-    if (index != -1) {
-      _tracks[index] = updatedTrack;
-      saveLibrary();
+    var didUpdate = false;
+
+    // Met à jour la bibliothèque globale
+    final trackIndex = _tracks.indexWhere((t) => t.id == updatedTrack.id);
+    if (trackIndex != -1) {
+      _tracks[trackIndex] = updatedTrack;
+      didUpdate = true;
     }
+
+    // Met à jour également la file d'attente si nécessaire
+    final queueIndex = _queue.indexWhere((t) => t.id == updatedTrack.id);
+    if (queueIndex != -1) {
+      _queue[queueIndex] = updatedTrack;
+      didUpdate = true;
+    }
+
+    if (didUpdate) saveLibrary();
   }
 
   void createPlaylist(String name) {
