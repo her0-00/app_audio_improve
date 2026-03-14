@@ -10,8 +10,21 @@ import 'models.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const CinemaAudioLuxeApp());
+
+  // Capture des erreurs non gérées pour éviter les plantages brutaux.
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+    debugPrint('Unhandled Flutter error: ${details.exception}');
+  };
+
+  runZonedGuarded(() {
+    runApp(const CinemaAudioLuxeApp());
+  }, (error, stack) {
+    debugPrint('Unhandled zone error: $error');
+    debugPrint('$stack');
+  });
 }
+
 
 // ─── État global partagé ─────────────────────────────────────────────────────
 class AudioState extends ChangeNotifier {
