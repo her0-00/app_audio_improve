@@ -92,6 +92,7 @@ class AudioState extends ChangeNotifier {
   // try/catch pour éviter qu'une erreur sur un seul fichier ferme l'app.
 
   Future<void> addFiles() async {
+    print('🎵 addFiles: Début');
     FilePickerResult? result;
     try {
       result = await FilePicker.platform.pickFiles(
@@ -99,29 +100,37 @@ class AudioState extends ChangeNotifier {
         allowedExtensions: ['mp3', 'wav', 'flac', 'm4a', 'aac', 'ogg', 'opus'],
         allowMultiple: true,
       );
+      print('🎵 FilePicker result: ${result?.files.length ?? 0} fichiers');
     } catch (e) {
-      debugPrint('FilePicker error: $e');
-      return; // Annulation ou permission refusée → on sort proprement
+      print('❌ FilePicker error: $e');
+      return;
     }
-    if (result == null) return;
+    if (result == null) {
+      print('⚠️ FilePicker annulé');
+      return;
+    }
 
     int addedCount = 0;
     for (final f in result.files) {
       final path = f.path;
-      if (path == null) continue;
-
-      // Vérification existence fichier
-      try {
-        if (!await File(path).exists()) {
-          debugPrint('Fichier introuvable: $path');
-          continue;
-        }
-      } catch (e) {
-        debugPrint('Erreur accès fichier $path: $e');
+      print('📁 Fichier: ${f.name}, path: $path');
+      if (path == null) {
+        print('⚠️ Path null pour ${f.name}');
         continue;
       }
 
-      // Ajout à la bibliothèque
+      try {
+        final file = File(path);
+        if (!await file.exists()) {
+          print('❌ Fichier introuvable: $path');
+          continue;
+        }
+        print('✅ Fichier existe: ${await file.length()} bytes');
+      } catch (e) {
+        print('❌ Erreur accès fichier $path: $e');
+        continue;
+      }
+
       final track = AudioTrack(
         id: '${DateTime.now().microsecondsSinceEpoch}_${f.name}',
         path: path,
@@ -131,28 +140,34 @@ class AudioState extends ChangeNotifier {
         duration: 0,
       );
       _library.addTrack(track);
+      print('✅ Track ajouté: ${track.title}');
       addedCount++;
     }
 
-    if (addedCount == 0) return;
+    print('📊 Total ajouté: $addedCount pistes');
+    print('📊 Queue size: ${_library.queue.length}');
 
-    // CORRECTION : charger la playlist dans un try/catch global
-    // Si ça échoue, on reste dans un état stable (pas de crash)
+    if (addedCount == 0) {
+      print('⚠️ Aucune piste ajoutée');
+      return;
+    }
+
     try {
+      print('🔄 Sync playlist...');
       await _syncPlaylist();
+      print('✅ Playlist synced');
     } catch (e) {
-      debugPrint('Erreur sync playlist: $e');
-      // Fallback : tenter de charger uniquement la piste courante
+      print('❌ Erreur sync playlist: $e');
       try {
         await _loadCurrent();
       } catch (e2) {
-        debugPrint('Erreur load current: $e2');
-        // État minimal stable : on a les pistes dans la liste mais pas de lecture
+        print('❌ Erreur load current: $e2');
         isPlaying = false;
         position = 0;
       }
     }
 
+    print('🔔 notifyListeners');
     notifyListeners();
   }
 
