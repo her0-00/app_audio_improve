@@ -237,50 +237,58 @@ class AudioState extends ChangeNotifier {
   }
 
   Future<void> _onNativeCall(MethodCall call) async {
-    switch (call.method) {
-      case 'onTrackChanged':
-        if (call.arguments is Map) {
-          final newIndex = (call.arguments as Map)['index'] as int?;
-          if (newIndex != null && newIndex >= 0 && newIndex < queue.length) {
-            _library.jumpTo(newIndex);
+    try {
+      switch (call.method) {
+        case 'onTrackChanged':
+          if (call.arguments is Map) {
+            final newIndex = (call.arguments as Map)['index'] as int?;
+            if (newIndex != null && newIndex >= 0 && newIndex < queue.length) {
+              _library.jumpTo(newIndex);
+              AppLogger.log('✅ Track changed to index $newIndex');
+            }
           }
-        }
-        position = 0;
-        isPlaying = true;
-        notifyListeners();
-        break;
-      case 'onTrackFinished':
-        isPlaying = false;
-        position = 0;
-        _posTimer?.cancel();
-        notifyListeners();
-        break;
-      case 'onDeviceChanged':
-        if (call.arguments is Map) {
-          currentDevice = (call.arguments as Map)['device']?.toString() ?? 'speaker';
+          position = 0;
+          isPlaying = true;
           notifyListeners();
-        }
-        break;
-      case 'onUnknownDevice':
-        // Appareil Bluetooth inconnu → on applique le profil générique sans crash
-        if (call.arguments is Map) {
-          currentDevice = (call.arguments as Map)['name']?.toString() ?? 'bluetooth';
+          break;
+        case 'onTrackFinished':
+          AppLogger.log('🏁 Track finished');
+          isPlaying = false;
+          position = 0;
+          _posTimer?.cancel();
           notifyListeners();
-        }
-        break;
-      case 'onSpectrumData':
-        if (call.arguments is List) {
-          spectrumData = (call.arguments as List)
-              .map((e) => (e as num).toDouble())
-              .toList();
-          notifyListeners();
-        }
-        break;
-      case 'log':
-        if (call.arguments is String) {
-          AppLogger.log(call.arguments as String);
-        }
-        break;
+          break;
+        case 'onDeviceChanged':
+          if (call.arguments is Map) {
+            currentDevice = (call.arguments as Map)['device']?.toString() ?? 'speaker';
+            AppLogger.log('🎧 Device changed to: $currentDevice');
+            notifyListeners();
+          }
+          break;
+        case 'onUnknownDevice':
+          if (call.arguments is Map) {
+            currentDevice = (call.arguments as Map)['name']?.toString() ?? 'bluetooth';
+            AppLogger.log('❓ Unknown device: $currentDevice');
+            notifyListeners();
+          }
+          break;
+        case 'onSpectrumData':
+          if (call.arguments is List) {
+            spectrumData = (call.arguments as List)
+                .map((e) => (e as num).toDouble())
+                .toList();
+            notifyListeners();
+          }
+          break;
+        case 'log':
+          if (call.arguments is String) {
+            AppLogger.log(call.arguments as String);
+          }
+          break;
+      }
+    } catch (e, stack) {
+      AppLogger.log('❌ CRASH _onNativeCall: $e');
+      AppLogger.log(stack.toString());
     }
   }
 
@@ -298,10 +306,11 @@ class AudioState extends ChangeNotifier {
       }
       final current = await _ch.invokeMethod<String>('getAudioDevice');
       selectedOutput = current ?? selectedOutput;
-    } catch (e) {
-      debugPrint('refreshOutputDevices error: $e');
+      notifyListeners();
+    } catch (e, stack) {
+      AppLogger.log('❌ refreshOutputDevices error: $e');
+      AppLogger.log(stack.toString());
     }
-    notifyListeners();
   }
 
   Future<bool> setOutputDevice(String portType) async {
@@ -309,13 +318,16 @@ class AudioState extends ChangeNotifier {
       final success = await _ch.invokeMethod<bool>('setOutputDevice', {'portType': portType});
       if (success == true) {
         selectedOutput = portType;
+        AppLogger.log('✅ Output device changed to: $portType');
         notifyListeners();
         return true;
       }
-    } catch (e) {
-      debugPrint('setOutputDevice error: $e');
+      return false;
+    } catch (e, stack) {
+      AppLogger.log('❌ setOutputDevice error: $e');
+      AppLogger.log(stack.toString());
+      return false;
     }
-    return false;
   }
 
   // ── Ajout de fichiers ───────────────────────────────────────────────────────
@@ -676,92 +688,121 @@ class AudioState extends ChangeNotifier {
   }
 
   Future<void> setShuffle(bool enabled) async {
-    if (enabled && queue.isEmpty) {
-      importStatus = 'Importez des fichiers audio avant d\'activer le mode aléatoire';
-      notifyListeners();
-      return;
-    }
-
-    shuffleEnabled = enabled;
-    await _saveAudioSettings();
     try {
+      if (enabled && queue.isEmpty) {
+        importStatus = 'Importez des fichiers audio avant d\'activer le mode aléatoire';
+        notifyListeners();
+        return;
+      }
+
+      shuffleEnabled = enabled;
+      await _saveAudioSettings();
       await _ch.invokeMethod('setShuffle', {'enabled': enabled});
-    } catch (e) {
-      debugPrint('setShuffle error: $e');
+      AppLogger.log('✅ Shuffle ${enabled ? "enabled" : "disabled"}');
+      notifyListeners();
+    } catch (e, stack) {
+      AppLogger.log('❌ CRASH setShuffle: $e');
+      AppLogger.log(stack.toString());
     }
-    notifyListeners();
   }
 
   Future<void> setRepeat(int mode) async {
-    if (mode > 0 && queue.isEmpty) {
-      importStatus = 'Importez des fichiers audio avant d\'activer la répétition';
-      notifyListeners();
-      return;
-    }
-
-    repeatMode = mode;
-    await _saveAudioSettings();
     try {
+      if (mode > 0 && queue.isEmpty) {
+        importStatus = 'Importez des fichiers audio avant d\'activer la répétition';
+        notifyListeners();
+        return;
+      }
+
+      repeatMode = mode;
+      await _saveAudioSettings();
       await _ch.invokeMethod('setRepeat', {'mode': mode});
-    } catch (e) {
-      debugPrint('setRepeat error: $e');
+      AppLogger.log('✅ Repeat mode: $mode');
+      notifyListeners();
+    } catch (e, stack) {
+      AppLogger.log('❌ CRASH setRepeat: $e');
+      AppLogger.log(stack.toString());
     }
-    notifyListeners();
   }
 
   Future<void> getDevice() async {
     try {
       currentDevice = await _ch.invokeMethod('getAudioDevice') ?? 'speaker';
-    } catch (e) {
-      debugPrint('getDevice error: $e');
+      AppLogger.log('🎧 Current device: $currentDevice');
+      notifyListeners();
+    } catch (e, stack) {
+      AppLogger.log('❌ getDevice error: $e');
+      AppLogger.log(stack.toString());
     }
-    notifyListeners();
   }
 
-  // Associer un appareil inconnu à un profil EQ depuis Flutter
   Future<void> bindDeviceProfile(String deviceName, String profile) async {
     try {
       await _ch.invokeMethod('bindDeviceProfile', {
         'name': deviceName,
         'profile': profile,
       });
-    } catch (e) {
-      debugPrint('bindDeviceProfile error: $e');
+      AppLogger.log('✅ Device profile bound: $deviceName -> $profile');
+    } catch (e, stack) {
+      AppLogger.log('❌ bindDeviceProfile error: $e');
+      AppLogger.log(stack.toString());
     }
   }
 
   void reorderQueue(int oldIndex, int newIndex) {
-    if (oldIndex < newIndex) newIndex -= 1;
-    final item = _library.queue.removeAt(oldIndex);
-    _library.queue.insert(newIndex, item);
-    if (_library.currentIndex == oldIndex) {
-      _library.jumpTo(newIndex);
-    } else if (_library.currentIndex > oldIndex && _library.currentIndex <= newIndex) {
-      _library.jumpTo(_library.currentIndex - 1);
-    } else if (_library.currentIndex < oldIndex && _library.currentIndex >= newIndex) {
-      _library.jumpTo(_library.currentIndex + 1);
+    try {
+      if (oldIndex < newIndex) newIndex -= 1;
+      final item = _library.queue.removeAt(oldIndex);
+      _library.queue.insert(newIndex, item);
+      if (_library.currentIndex == oldIndex) {
+        _library.jumpTo(newIndex);
+      } else if (_library.currentIndex > oldIndex && _library.currentIndex <= newIndex) {
+        _library.jumpTo(_library.currentIndex - 1);
+      } else if (_library.currentIndex < oldIndex && _library.currentIndex >= newIndex) {
+        _library.jumpTo(_library.currentIndex + 1);
+      }
+      AppLogger.log('✅ Queue reordered: $oldIndex -> $newIndex');
+      notifyListeners();
+    } catch (e, stack) {
+      AppLogger.log('❌ reorderQueue error: $e');
+      AppLogger.log(stack.toString());
     }
-    notifyListeners();
   }
 
   void removeFromQueue(int index) {
-    _library.removeFromQueue(index);
-    notifyListeners();
+    try {
+      if (index < 0 || index >= queue.length) {
+        AppLogger.log('⚠️ Invalid remove index: $index');
+        return;
+      }
+      final track = queue[index];
+      _library.removeFromQueue(index);
+      AppLogger.log('✅ Removed from queue: ${track.title}');
+      notifyListeners();
+    } catch (e, stack) {
+      AppLogger.log('❌ removeFromQueue error: $e');
+      AppLogger.log(stack.toString());
+    }
   }
 
   void reorder(int oldIndex, int newIndex) => reorderQueue(oldIndex, newIndex);
   void removeTrack(int index) => removeFromQueue(index);
 
   void _startTimer() {
-    _posTimer?.cancel();
-    _posTimer = Timer.periodic(const Duration(milliseconds: 300), (_) async {
-      if (!isPlaying || _isUserSeeking) return; // Don't update if user is seeking
-      try {
-        final pos = await _ch.invokeMethod<double>('getPosition') ?? position;
-        position = pos.clamp(0.0, duration);
-        notifyListeners();
-      } catch (_) {}
-    });
+    try {
+      _posTimer?.cancel();
+      _posTimer = Timer.periodic(const Duration(milliseconds: 300), (_) async {
+        if (!isPlaying || _isUserSeeking) return;
+        try {
+          final pos = await _ch.invokeMethod<double>('getPosition') ?? position;
+          position = pos.clamp(0.0, duration);
+          notifyListeners();
+        } catch (_) {}
+      });
+    } catch (e, stack) {
+      AppLogger.log('❌ _startTimer error: $e');
+      AppLogger.log(stack.toString());
+    }
   }
 
   @override
