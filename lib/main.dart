@@ -282,10 +282,23 @@ class AudioState extends ChangeNotifier {
               _tracksPlayed++;
               _saveAudioSettings();
               AppLogger.log('✅ Track changed to index $newIndex');
+              
+              // CRITICAL: Update duration when track changes
+              try {
+                await Future.delayed(const Duration(milliseconds: 200));
+                final dur = await _ch.invokeMethod<double>('getDuration') ?? 0.0;
+                AppLogger.log('⏱️ New track duration: $dur');
+                if (dur > 0 && current != null) {
+                  _library.updateTrack(current!.copyWith(duration: dur));
+                }
+              } catch (e) {
+                AppLogger.log('❌ getDuration after track change: $e');
+              }
             }
           }
           position = 0;
           isPlaying = true;
+          _startTimer();
           notifyListeners();
           break;
         case 'onTrackFinished':
@@ -929,7 +942,14 @@ class AudioState extends ChangeNotifier {
         if (!isPlaying || _isUserSeeking) return;
         try {
           final pos = await _ch.invokeMethod<double>('getPosition') ?? position;
-          position = pos.clamp(0.0, duration);
+          final dur = await _ch.invokeMethod<double>('getDuration') ?? duration;
+          
+          // Update duration if changed (handles track changes)
+          if (dur > 0 && dur != duration && current != null) {
+            _library.updateTrack(current!.copyWith(duration: dur));
+          }
+          
+          position = pos.clamp(0.0, dur > 0 ? dur : 1.0);
           
           // Update play time stats (every 0.5s = increment by 1 every 2 ticks)
           _timerTicks++;
@@ -1821,17 +1841,11 @@ class _MixingConsoleScreenState extends State<MixingConsoleScreen> {
         _currentPresetName = name;
       });
 
-      // CRITICAL: Resync playlist before applying effects
-      if (_audio.queue.isNotEmpty) {
-        AppLogger.log('🔄 Resyncing playlist before applying preset...');
-        await _audio._syncPlaylist();
-      }
-
-      // Apply to native with delays to prevent crashes
+      // Apply to native WITHOUT resync (causes crashes)
       for (final entry in newFx.entries) {
         try {
           await _ch.invokeMethod('setEffect', {'effect': entry.key, 'value': entry.value});
-          await Future.delayed(const Duration(milliseconds: 100));
+          await Future.delayed(const Duration(milliseconds: 50));
         } catch (e) {
           AppLogger.log('❌ Error setting ${entry.key}: $e');
         }
@@ -1896,17 +1910,11 @@ class _MixingConsoleScreenState extends State<MixingConsoleScreen> {
         _currentPresetName = null;
       });
 
-      // CRITICAL: Resync playlist before applying effects
-      if (_audio.queue.isNotEmpty) {
-        AppLogger.log('🔄 Resyncing playlist before resetting...');
-        await _audio._syncPlaylist();
-      }
-
-      // Apply to native with delays
+      // Apply to native WITHOUT resync (causes crashes)
       for (final entry in _defaultConfig.entries) {
         try {
           await _ch.invokeMethod('setEffect', {'effect': entry.key, 'value': entry.value});
-          await Future.delayed(const Duration(milliseconds: 100));
+          await Future.delayed(const Duration(milliseconds: 50));
         } catch (e) {
           AppLogger.log('❌ Error setting ${entry.key}: $e');
         }
