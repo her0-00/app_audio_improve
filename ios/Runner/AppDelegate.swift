@@ -32,6 +32,7 @@ import Accelerate
 
   private var currentEQProfile = "default"
   private var currentPreset = "cinema"
+  private var positionTimer: Timer?
 
   override func application(
     _ application: UIApplication,
@@ -498,16 +499,30 @@ import Accelerate
         channel?.invokeMethod("log", arguments: "⚠️ Nothing to play")
         return
       }
+      // NE PAS utiliser completion handler - utiliser Timer à la place
       player.scheduleSegment(file, startingFrame: startFrame,
-        frameCount: AVAudioFrameCount(remaining), at: nil) { [weak self] in
-        DispatchQueue.main.async { self?.onTrackFinished() }
-      }
+        frameCount: AVAudioFrameCount(remaining), at: nil, completionHandler: nil)
       player.play()
       isPlaying = true
+      startPositionMonitoring()
       updateNowPlaying()
       channel?.invokeMethod("log", arguments: "✅ Playing")
     } catch {
       channel?.invokeMethod("log", arguments: "❌ CRASH play: \(error)")
+    }
+  }
+  
+  private func startPositionMonitoring() {
+    positionTimer?.invalidate()
+    positionTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+      guard let self = self, self.isPlaying else { return }
+      let pos = self.getPosition()
+      let dur = self.getDuration()
+      // Détecter la fin réelle (position >= 99% de la durée)
+      if pos >= dur * 0.99 {
+        self.positionTimer?.invalidate()
+        self.onTrackFinished()
+      }
     }
   }
 
@@ -518,6 +533,7 @@ import Accelerate
         return
       }
 
+      positionTimer?.invalidate()
       lastSeekTime    = getPosition()
       seekFrameOffset = AVAudioFramePosition(lastSeekTime * (audioFile?.processingFormat.sampleRate ?? 44100))
       if let player = player {
@@ -656,6 +672,9 @@ import Accelerate
 
   private func onTrackFinished() {
     do {
+      positionTimer?.invalidate()
+      channel?.invokeMethod("log", arguments: "🏁 Track finished")
+      
       guard !playlist.isEmpty else {
         channel?.invokeMethod("onTrackFinished", arguments: nil)
         return
