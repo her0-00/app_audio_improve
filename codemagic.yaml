@@ -4,7 +4,7 @@ workflows:
     max_build_duration: 90
     environment:
       flutter: stable
-      xcode: 15.2
+      xcode: latest
       cocoapods: default
       vars:
         BUNDLE_ID: "com.cinemaaudioluxe.app"
