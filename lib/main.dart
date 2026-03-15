@@ -1582,6 +1582,12 @@ class _MixingConsoleScreenState extends State<MixingConsoleScreen> {
         _currentPresetName = name;
       });
 
+      // CRITICAL: Resync playlist before applying effects
+      if (_audio.queue.isNotEmpty) {
+        AppLogger.log('🔄 Resyncing playlist before applying preset...');
+        await _audio._syncPlaylist();
+      }
+
       // Apply to native with delays to prevent crashes
       for (final entry in newFx.entries) {
         try {
@@ -1650,6 +1656,12 @@ class _MixingConsoleScreenState extends State<MixingConsoleScreen> {
         _fx.addAll(_defaultConfig);
         _currentPresetName = null;
       });
+
+      // CRITICAL: Resync playlist before applying effects
+      if (_audio.queue.isNotEmpty) {
+        AppLogger.log('🔄 Resyncing playlist before resetting...');
+        await _audio._syncPlaylist();
+      }
 
       // Apply to native with delays
       for (final entry in _defaultConfig.entries) {
