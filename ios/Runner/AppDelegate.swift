@@ -803,8 +803,15 @@ import Accelerate
 
       if let next = nextIndex() {
         currentIndex = next
-        loadAudio(path: playlist[currentIndex])
-        play()
+        
+        // Use crossfade if enabled
+        if crossfadeEnabled {
+          playCrossfade(nextPath: playlist[currentIndex])
+        } else {
+          loadAudio(path: playlist[currentIndex])
+          play()
+        }
+        
         channel?.invokeMethod("onTrackChanged", arguments: ["index": currentIndex])
       } else {
         channel?.invokeMethod("onTrackFinished", arguments: nil)
@@ -825,8 +832,15 @@ import Accelerate
       if let next = nextIndex() {
         currentIndex = next
         channel?.invokeMethod("log", arguments: "playNext(): loading track at index \(currentIndex)")
-        loadAudio(path: playlist[currentIndex])
-        play()
+        
+        // Use crossfade if enabled
+        if crossfadeEnabled {
+          playCrossfade(nextPath: playlist[currentIndex])
+        } else {
+          loadAudio(path: playlist[currentIndex])
+          play()
+        }
+        
         channel?.invokeMethod("onTrackChanged", arguments: ["index": currentIndex])
       } else {
         channel?.invokeMethod("log", arguments: "playNext(): no next index")

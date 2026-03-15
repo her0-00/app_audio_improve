@@ -72,6 +72,7 @@ class AudioState extends ChangeNotifier {
   String selectedOutput = 'default';
   List<Map<String, String>> availableOutputs = [];
   List<double> spectrumData = List.filled(32, 0.0);
+  bool crossfadeEnabled = false;
 
   // Messages d'état affichés à l'utilisateur (Import / Erreurs)
   String importStatus = '';
@@ -742,6 +743,21 @@ class AudioState extends ChangeNotifier {
     }
   }
 
+  Future<void> setCrossfade(bool enabled) async {
+    try {
+      crossfadeEnabled = enabled;
+      await _ch.invokeMethod('setCrossfade', {
+        'enabled': enabled,
+        'duration': 2.0,
+      });
+      AppLogger.log('✅ Crossfade ${enabled ? "enabled" : "disabled"}');
+      notifyListeners();
+    } catch (e, stack) {
+      AppLogger.log('❌ setCrossfade error: $e');
+      AppLogger.log(stack.toString());
+    }
+  }
+
   void reorderQueue(int oldIndex, int newIndex) {
     try {
       if (oldIndex < newIndex) newIndex -= 1;
@@ -1285,7 +1301,7 @@ class PlayerScreen extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  // Shuffle + Repeat
+                  // Shuffle + Repeat + Crossfade
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
@@ -1298,7 +1314,7 @@ class PlayerScreen extends StatelessWidget {
                             ? () => _audio.setShuffle(!_audio.shuffleEnabled)
                             : null,
                       ),
-                      const SizedBox(width: 20),
+                      const SizedBox(width: 8),
                       IconButton(
                         icon: Icon(
                           _audio.repeatMode == 2 ? Icons.repeat_one : Icons.repeat,
@@ -1308,8 +1324,27 @@ class PlayerScreen extends StatelessWidget {
                             ? () => _audio.setRepeat((_audio.repeatMode + 1) % 3)
                             : null,
                       ),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        icon: Icon(
+                          Icons.auto_awesome,
+                          color: _audio.crossfadeEnabled ? _gold : Colors.white54,
+                        ),
+                        tooltip: 'Crossfade (transition DJ)',
+                        onPressed: _audio.queue.isNotEmpty
+                            ? () => _audio.setCrossfade(!_audio.crossfadeEnabled)
+                            : null,
+                      ),
                     ],
                   ),
+                  if (_audio.crossfadeEnabled)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 8),
+                      child: Text(
+                        '✨ CROSSFADE ACTIVÉ',
+                        style: TextStyle(color: _gold, fontSize: 10, letterSpacing: 2),
+                      ),
+                    ),
                 ],
               );
             },
