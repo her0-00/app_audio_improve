@@ -408,6 +408,7 @@ class AudioState extends ChangeNotifier {
       }
 
       try {
+        AppLogger.log('🔄 Syncing ${addedCount} new tracks with Swift...');
         await _syncPlaylist();
         AppLogger.log('✅ Sync OK');
       } catch (e) {
@@ -538,35 +539,33 @@ class AudioState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // CORRECTION : _syncPlaylist ne propage plus d'exception vers addFiles
   Future<void> _syncPlaylist() async {
     if (queue.isEmpty) return;
     try {
-      print('📤 Calling loadPlaylist with ${queue.length} tracks');
+      AppLogger.log('📤 Calling loadPlaylist with ${queue.length} tracks');
       final paths = queue.map((t) => t.path).toList();
-      print('📂 Paths: $paths');
+      AppLogger.log('📂 Paths: ${paths.join(", ")}');
       await _ch.invokeMethod('loadPlaylist', {
         'paths': paths,
         'index': currentIndex,
       });
-      print('✅ loadPlaylist completed');
+      AppLogger.log('✅ loadPlaylist completed - Swift now has ${queue.length} tracks');
     } catch (e) {
-      print('❌ loadPlaylist error: $e');
+      AppLogger.log('❌ loadPlaylist error: $e');
       debugPrint('loadPlaylist error: $e');
-      // Fallback sur loadAudio simple
       await _loadCurrent();
       return;
     }
 
     try {
       final dur = await _ch.invokeMethod<double>('getDuration') ?? 0.0;
-      print('⏱️ Duration received: $dur');
+      AppLogger.log('⏱️ Duration received: $dur');
       if (dur > 0 && current != null) {
         _library.updateTrack(current!.copyWith(duration: dur));
       }
     } catch (e) {
-      print('❌ getDuration error: $e');
-      debugPrint('getDuration error: $e'); // Non bloquant
+      AppLogger.log('❌ getDuration error: $e');
+      debugPrint('getDuration error: $e');
     }
     position = 0;
     notifyListeners();
