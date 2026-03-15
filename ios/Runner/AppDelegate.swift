@@ -949,18 +949,27 @@ import Accelerate
 
       switch reason {
       case .newDeviceAvailable:
+        // CRITICAL: Save position BEFORE changing device
+        let savedPos = getPosition()
+        let wasPlaying = isPlaying
+        
         autoApplyEQForDevice()
         channel?.invokeMethod("onDeviceChanged", arguments: ["device": getCurrentAudioDevice()])
+        
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-          self?.restartEngineKeepingPosition()
+          guard let self = self else { return }
+          self.restartEngineKeepingPosition(savedPosition: savedPos, wasPlaying: wasPlaying)
         }
       case .oldDeviceUnavailable:
         if isPlaying { pause() }
         applyEQProfile("speaker")
         channel?.invokeMethod("onDeviceChanged", arguments: ["device": "speaker"])
       case .categoryChange, .override:
+        let savedPos = getPosition()
+        let wasPlaying = isPlaying
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-          self?.restartEngineKeepingPosition()
+          guard let self = self else { return }
+          self.restartEngineKeepingPosition(savedPosition: savedPos, wasPlaying: wasPlaying)
         }
       default: break
       }
@@ -985,26 +994,44 @@ import Accelerate
     }
   }
 
-  private func restartEngineKeepingPosition() {
+  private func restartEngineKeepingPosition(savedPosition: Double? = nil, wasPlaying: Bool? = nil) {
     do {
-      let savedPos = getPosition(); let wasPlaying = isPlaying
+      let savedPos = savedPosition ?? getPosition()
+      let shouldPlay = wasPlaying ?? isPlaying
+      
+      channel?.invokeMethod("log", arguments: "🔄 Restarting engine at position \(savedPos), wasPlaying: \(shouldPlay)")
+      
       guard let engine = audioEngine else {
-        setupAudioEngine(); if wasPlaying { play() }; return
+        setupAudioEngine()
+        if shouldPlay { 
+          seek(to: savedPos)
+          play() 
+        }
+        return
       }
+      
       configureAudioSession()
       if isEngineRunning { engine.stop(); isEngineRunning = false }
       try engine.start(); isEngineRunning = true
-      if wasPlaying { seek(to: savedPos) }
-      else {
-        seekFrameOffset = AVAudioFramePosition(savedPos * (audioFile?.processingFormat.sampleRate ?? 44100))
-        lastSeekTime = savedPos
+      
+      // Restore position
+      seekFrameOffset = AVAudioFramePosition(savedPos * (audioFile?.processingFormat.sampleRate ?? 44100))
+      lastSeekTime = savedPos
+      
+      if shouldPlay { 
+        seek(to: savedPos)
+        play()
       }
-      channel?.invokeMethod("log", arguments: "✅ Engine restarted")
+      
+      channel?.invokeMethod("log", arguments: "✅ Engine restarted at \(savedPos)")
     } catch {
       channel?.invokeMethod("log", arguments: "❌ restartEngine error: \(error)")
-      audioEngine = nil; setupAudioEngine()
-      let savedPos = getPosition(); let wasPlaying = isPlaying
-      seek(to: savedPos); if wasPlaying { play() }
+      audioEngine = nil
+      setupAudioEngine()
+      let savedPos = savedPosition ?? getPosition()
+      let shouldPlay = wasPlaying ?? isPlaying
+      seek(to: savedPos)
+      if shouldPlay { play() }
     }
   }
   
