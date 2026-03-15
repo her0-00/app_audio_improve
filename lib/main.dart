@@ -919,9 +919,12 @@ class AudioState extends ChangeNotifier {
   void reorder(int oldIndex, int newIndex) => reorderQueue(oldIndex, newIndex);
   void removeTrack(int index) => removeFromQueue(index);
 
+  int _timerTicks = 0;
+  
   void _startTimer() {
     try {
       _posTimer?.cancel();
+      _timerTicks = 0;
       _posTimer = Timer.periodic(const Duration(milliseconds: 500), (_) async {
         if (!isPlaying || _isUserSeeking) return;
         try {
@@ -929,7 +932,8 @@ class AudioState extends ChangeNotifier {
           position = pos.clamp(0.0, duration);
           
           // Update play time stats (every 0.5s = increment by 1 every 2 ticks)
-          if (_ % 2 == 0) {
+          _timerTicks++;
+          if (_timerTicks % 2 == 0) {
             _totalPlayTime++;
             if (_totalPlayTime % 60 == 0) {
               _saveAudioSettings(); // Save every minute
