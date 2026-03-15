@@ -12,11 +12,14 @@ Application iOS de lecture audio avec traitement DSP "Cinéma de Luxe" (EQ, Reve
 
 ## Fonctionnalités
 
-### 3 Écrans Principaux
+### 6 Écrans Principaux
 
 1. **Importateur**: Sélection fichiers audio (MP3, WAV, FLAC, M4A)
 2. **Lecteur VIP**: Play/Pause, barre de progression avec temps MM:SS
-3. **Console de Mixage**: 3 sliders de contrôle DSP
+3. **File d'attente**: Gestion playlist avec réorganisation drag & drop
+4. **Console de Mixage**: 11 sliders de contrôle DSP
+5. **Statistiques**: Temps d'écoute, pistes jouées, playlists intelligentes
+6. **YouTube Streaming**: Recherche et lecture directe avec effets DSP
 
 ### Chaîne DSP (Swift)
 
@@ -28,6 +31,17 @@ Audio → EQ Paramétrique → Reverb 3D → Compresseur → Limiter → Sortie
 - **Reverb**: Large Hall avec mix ajustable (0-100%)
 - **Compresseur**: Threshold -20dB, ratio 2:1, protection dynamique
 - **Volume Boost**: Gain jusqu'à +200% avec protection limiter
+
+### Innovations
+
+- **YouTube Streaming**: Recherche et lecture directe avec tous les effets DSP
+- **Crossfade DJ**: Transitions fluides entre pistes (2 secondes)
+- **Smart Playlists**: Auto-catégorisation par BPM et genre (Énergique/Chill/Bass)
+- **BPM Detection**: Détection heuristique avec animation beat pulse
+- **Preset Sharing**: Export/import configurations via JSON
+- **Statistics**: Suivi temps d'écoute et pistes jouées
+- **Device Profiles**: EQ automatique par appareil (AirPods, Bluetooth, etc.)
+- **Now Playing**: Intégration Control Center iOS avec artwork et métadonnées
 
 ## Installation & Build
 
@@ -108,8 +122,10 @@ app__audio_improve/
 
 ## Dépendances
 
-- `file_picker: ^5.5.0` - Import fichiers audio (version stable iOS)
+- `file_picker: ^5.3.0` - Import fichiers audio (version stable iOS)
 - `path_provider: ^2.1.1` - Gestion chemins iOS
+- `shared_preferences: ^2.2.2` - Sauvegarde configurations
+- `XCDYouTubeKit: ~> 2.16` - Streaming YouTube (CocoaPods)
 
 ## Permissions iOS 18
 
@@ -124,7 +140,7 @@ Automatiquement configurées dans `Info.plist`:
 ## Utilisation
 
 ### Écran 1: Importateur
-- Appuyer sur "IMPORTER UN FICHIER"
+- Appuyer sur "AJOUTER DES FICHIERS"
 - Sélectionner un fichier audio (MP3, WAV, FLAC, M4A)
 - Fichier chargé automatiquement
 
@@ -132,13 +148,32 @@ Automatiquement configurées dans `Info.plist`:
 - **Play/Pause**: Bouton cercle doré
 - **Barre de progression**: Glisser pour chercher
 - **Temps**: Affichage MM:SS courant / total
-- **Console de Mixage**: Bouton pour accéder aux effets
+- **Presets**: Cinema, Concert, Studio, Bass+, Vocal
+- **Shuffle/Repeat/Crossfade**: Boutons en bas
 
-### Écran 3: Console de Mixage
-- **IMMERSION (REVERB)**: 0-100% (Large Hall)
-- **SUB-BASS (40Hz)**: 0-100% (Boost graves)
-- **BOOST VOLUME**: 0-100% (+0 à +200%)
-- **RETOUR**: Revenir au lecteur
+### Écran 3: File d'attente
+- **Réorganiser**: Drag & drop
+- **Supprimer**: Bouton X
+- **Smart Playlists**: Menu en haut à droite (Énergique/Chill/Bass)
+- **Nettoyer**: Supprimer pistes manquantes
+
+### Écran 4: Console de Mixage
+- **11 effets**: Reverb, Bass, Delay, Warmth, Clarity, Presence, Pitch, Crossfeed, Exciter, Compress, Volume
+- **Sauvegarder**: Créer configurations personnalisées
+- **Partager**: Export/import via JSON
+- **Défaut**: Réinitialiser aux valeurs d'usine
+
+### Écran 5: Statistiques
+- **Temps d'écoute**: Total en heures/minutes
+- **Pistes jouées**: Compteur
+- **Playlists intelligentes**: Nombre de pistes par catégorie
+- **Session actuelle**: Preset, shuffle, repeat, crossfade, BPM
+
+### Écran 6: YouTube Streaming
+- **Rechercher**: Taper mots-clés et appuyer sur Entrée
+- **Écouter**: Cliquer sur un résultat
+- **Effets DSP**: Tous les effets s'appliquent au streaming
+- **Contrôles**: Utiliser le lecteur principal (écran 2)
 
 ## Troubleshooting
 

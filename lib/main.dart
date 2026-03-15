@@ -1039,6 +1039,7 @@ class _MainShellState extends State<MainShell> {
       const QueueScreen(),
       const MixingConsoleScreen(),
       const StatsScreen(),
+      const YouTubeScreen(),
     ];
     return Scaffold(
       body: pages[_tab],
@@ -1071,6 +1072,7 @@ class _MainShellState extends State<MainShell> {
               NavigationDestination(icon: Icon(Icons.queue_music), label: 'File'),
               NavigationDestination(icon: Icon(Icons.tune), label: 'Console'),
               NavigationDestination(icon: Icon(Icons.bar_chart), label: 'Stats'),
+              NavigationDestination(icon: Icon(Icons.play_circle), label: 'YouTube'),
             ],
           ),
         ],
@@ -2654,6 +2656,243 @@ class _InfoRow extends StatelessWidget {
           Text(
             value,
             style: const TextStyle(color: _gold, fontSize: 13, fontWeight: FontWeight.w500),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Écran 6 : YouTube ───────────────────────────────────────────────────────
+class YouTubeScreen extends StatefulWidget {
+  const YouTubeScreen({super.key});
+  @override
+  State<YouTubeScreen> createState() => _YouTubeScreenState();
+}
+
+class _YouTubeScreenState extends State<YouTubeScreen> {
+  static const _ch = MethodChannel('cinema.audio.luxe/audio');
+  final _searchController = TextEditingController();
+  List<Map<String, String>> _results = [];
+  bool _isSearching = false;
+  String? _streamingVideoId;
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _search(String query) async {
+    if (query.trim().isEmpty) return;
+    
+    setState(() {
+      _isSearching = true;
+      _results = [];
+    });
+
+    try {
+      final results = await _ch.invokeMethod<List>('searchYouTube', {
+        'query': query,
+        'maxResults': 20,
+      });
+
+      if (results != null) {
+        setState(() {
+          _results = results
+              .cast<Map>()
+              .map((m) => {
+                    'videoId': m['videoId']?.toString() ?? '',
+                    'title': m['title']?.toString() ?? 'Unknown',
+                  })
+              .toList();
+        });
+        AppLogger.log('✅ Found ${_results.length} YouTube results');
+      }
+    } catch (e) {
+      AppLogger.log('❌ YouTube search error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erreur de recherche: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      setState(() => _isSearching = false);
+    }
+  }
+
+  Future<void> _streamVideo(String videoId, String title) async {
+    try {
+      AppLogger.log('🎵 Streaming YouTube: $videoId');
+      
+      setState(() => _streamingVideoId = videoId);
+
+      // Get stream URL
+      final streamUrl = await _ch.invokeMethod<String>('streamYouTube', {
+        'videoId': videoId,
+      });
+
+      if (streamUrl == null || streamUrl.isEmpty) {
+        throw Exception('No stream URL returned');
+      }
+
+      AppLogger.log('✅ Stream URL obtained: ${streamUrl.substring(0, 50)}...');
+
+      // Load and play the stream
+      await _ch.invokeMethod('loadAudio', {'path': streamUrl});
+      await _ch.invokeMethod('play');
+
+      AppLogger.log('✅ YouTube streaming started');
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('▶️ Lecture: $title'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      AppLogger.log('❌ YouTube stream error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erreur de lecture: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      setState(() => _streamingVideoId = null);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: _dark,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        title: const Text('YOUTUBE STREAMING',
+            style: TextStyle(letterSpacing: 3, fontSize: 14, color: _gold)),
+      ),
+      body: Column(
+        children: [
+          // Search bar
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      hintText: 'Rechercher sur YouTube...',
+                      hintStyle: const TextStyle(color: Colors.white38),
+                      filled: true,
+                      fillColor: const Color(0xFF1A1A1A),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide.none,
+                      ),
+                      prefixIcon: const Icon(Icons.search, color: _gold),
+                    ),
+                    onSubmitted: _search,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: const Icon(Icons.search, color: _gold, size: 32),
+                  onPressed: () => _search(_searchController.text),
+                ),
+              ],
+            ),
+          ),
+          
+          // Results
+          Expanded(
+            child: _isSearching
+                ? const Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        CircularProgressIndicator(color: _gold),
+                        SizedBox(height: 16),
+                        Text('Recherche en cours...',
+                            style: TextStyle(color: Colors.white54)),
+                      ],
+                    ),
+                  )
+                : _results.isEmpty
+                    ? const Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.play_circle_outline, size: 80, color: Colors.white24),
+                            SizedBox(height: 16),
+                            Text(
+                              'Recherchez de la musique\nsur YouTube',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: Colors.white38, fontSize: 14),
+                            ),
+                          ],
+                        ),
+                      )
+                    : ListView.builder(
+                        padding: const EdgeInsets.only(bottom: 80),
+                        itemCount: _results.length,
+                        itemBuilder: (_, i) {
+                          final result = _results[i];
+                          final videoId = result['videoId'] ?? '';
+                          final title = result['title'] ?? 'Unknown';
+                          final isStreaming = _streamingVideoId == videoId;
+
+                          return ListTile(
+                            leading: Container(
+                              width: 48,
+                              height: 48,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF1A1A1A),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: isStreaming
+                                  ? const Center(
+                                      child: SizedBox(
+                                        width: 24,
+                                        height: 24,
+                                        child: CircularProgressIndicator(
+                                          color: _gold,
+                                          strokeWidth: 2,
+                                        ),
+                                      ),
+                                    )
+                                  : const Icon(Icons.play_circle, color: _gold, size: 32),
+                            ),
+                            title: Text(
+                              title,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 14,
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            subtitle: Text(
+                              videoId,
+                              style: const TextStyle(
+                                color: Colors.white38,
+                                fontSize: 11,
+                              ),
+                            ),
+                            onTap: isStreaming ? null : () => _streamVideo(videoId, title),
+                          );
+                        },
+                      ),
           ),
         ],
       ),

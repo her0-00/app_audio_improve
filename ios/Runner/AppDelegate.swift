@@ -146,6 +146,40 @@ import Accelerate
            let url = URL(string: urlString) {
           UIApplication.shared.open(url); result(nil)
         }
+      case "searchYouTube":
+        if let args = call.arguments as? [String: Any],
+           let query = args["query"] as? String {
+          let maxResults = args["maxResults"] as? Int ?? 10
+          YouTubeService.shared.search(query: query, maxResults: maxResults) { results, error in
+            if let error = error {
+              result(FlutterError(code: "SEARCH_ERROR", message: error, details: nil))
+            } else {
+              result(results)
+            }
+          }
+        }
+      case "streamYouTube":
+        if let args = call.arguments as? [String: Any],
+           let videoId = args["videoId"] as? String {
+          YouTubeService.shared.getAudioStreamURL(videoId: videoId) { url, error in
+            if let error = error {
+              result(FlutterError(code: "STREAM_ERROR", message: error, details: nil))
+            } else {
+              result(url)
+            }
+          }
+        }
+      case "getYouTubeInfo":
+        if let args = call.arguments as? [String: Any],
+           let videoId = args["videoId"] as? String {
+          YouTubeService.shared.getVideoInfo(videoId: videoId) { info, error in
+            if let error = error {
+              result(FlutterError(code: "INFO_ERROR", message: error, details: nil))
+            } else {
+              result(info)
+            }
+          }
+        }
       default:
         result(FlutterMethodNotImplemented)
       }
