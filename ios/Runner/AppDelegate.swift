@@ -223,8 +223,7 @@ import Accelerate
     engine.connect(comp,       to: delay,      format: format)
     engine.connect(delay,      to: reverb,     format: format)
     engine.connect(reverb,     to: timePitch,  format: format)
-    engine.connect(timePitch,  to: mixer,      format: format)
-    engine.connect(mixer,      to: engine.mainMixerNode, format: format)
+    engine.connect(timePitch,  to: engine.mainMixerNode, format: format)
     engine.mainMixerNode.outputVolume = 1.0
 
     engine.prepare()
@@ -240,7 +239,8 @@ import Accelerate
     setupRemoteControls()
     applyPreset(currentPreset)
     autoApplyEQForDevice()
-    startSpectrumAnalysis()
+    // Spectrum analysis disabled - causes performance issues
+    // startSpectrumAnalysis()
   }
 
   // MARK: - EQ Profiles
@@ -1124,16 +1124,35 @@ import Accelerate
   }
   
   private func playCrossfade(nextPath: String) {
-    guard crossfadeEnabled, let player2 = player2 else {
+    guard crossfadeEnabled, let player2 = player2, let engine = audioEngine, isEngineRunning else {
       // Fallback to normal playback
+      channel?.invokeMethod("log", arguments: "⚠️ Crossfade not available, using normal playback")
       loadAudio(path: nextPath)
       play()
       return
     }
     
     do {
+      // Verify file exists
+      guard FileManager.default.fileExists(atPath: nextPath) else {
+        channel?.invokeMethod("log", arguments: "❌ Crossfade: file not found")
+        loadAudio(path: nextPath)
+        play()
+        return
+      }
+      
       // Load next track in player2
       let nextFile = try AVAudioFile(forReading: URL(fileURLWithPath: nextPath))
+      
+      // Verify format compatibility
+      guard nextFile.processingFormat.sampleRate == audioFile?.processingFormat.sampleRate else {
+        channel?.invokeMethod("log", arguments: "⚠️ Sample rate mismatch, using normal playback")
+        loadAudio(path: nextPath)
+        play()
+        return
+      }
+      
+      channel?.invokeMethod("log", arguments: "🎵 Starting crossfade...")
       
       // Start fading out player1
       let fadeSteps = 20
@@ -1166,15 +1185,17 @@ import Accelerate
           self.player = self.player2
           self.player2 = temp
           self.player?.volume = 1.0
+          self.player2?.volume = 0.0
           
           // Update audio file reference
           self.audioFile = nextFile
           self.seekFrameOffset = 0
           self.lastSeekTime = 0
+          self.isPlaying = true
+          
+          self.channel?.invokeMethod("log", arguments: "✅ Crossfade completed")
         }
       }
-      
-      channel?.invokeMethod("log", arguments: "✅ Crossfade started")
     } catch {
       channel?.invokeMethod("log", arguments: "❌ Crossfade error: \(error)")
       // Fallback

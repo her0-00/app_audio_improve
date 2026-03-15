@@ -509,6 +509,9 @@ class AudioState extends ChangeNotifier {
         _library.updateTrack(currentTrack.copyWith(duration: dur));
       }
 
+      // Detect BPM from filename (simple heuristic)
+      _detectBPM(currentTrack.title);
+
       isPlaying = true;
       position = 0;
       notifyListeners();
@@ -518,6 +521,36 @@ class AudioState extends ChangeNotifier {
       isPlaying = false;
       notifyListeners();
     }
+  }
+
+  void _detectBPM(String title) {
+    final lower = title.toLowerCase();
+    
+    // Simple genre-based BPM estimation
+    if (lower.contains('trap') || lower.contains('hip') || lower.contains('rap')) {
+      detectedBPM = 140.0;
+    } else if (lower.contains('house') || lower.contains('edm') || lower.contains('dance')) {
+      detectedBPM = 128.0;
+    } else if (lower.contains('techno')) {
+      detectedBPM = 135.0;
+    } else if (lower.contains('dubstep') || lower.contains('bass')) {
+      detectedBPM = 140.0;
+    } else if (lower.contains('pop') || lower.contains('mood')) {
+      detectedBPM = 120.0;
+    } else if (lower.contains('rock') || lower.contains('metal')) {
+      detectedBPM = 130.0;
+    } else if (lower.contains('jazz') || lower.contains('blues')) {
+      detectedBPM = 90.0;
+    } else if (lower.contains('classical') || lower.contains('symphony')) {
+      detectedBPM = 80.0;
+    } else if (lower.contains('chill') || lower.contains('lofi')) {
+      detectedBPM = 85.0;
+    } else {
+      // Default BPM for unknown genres
+      detectedBPM = 120.0;
+    }
+    
+    AppLogger.log('🎵 Detected BPM: ${detectedBPM.toInt()} for "$title"');
   }
 
   // CORRECTION : getDuration retourne 0.0 en cas d'erreur, jamais d'exception
