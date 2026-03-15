@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:async';
 import 'dart:io';
+import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'audio_library.dart';
 import 'models.dart';
@@ -73,6 +74,8 @@ class AudioState extends ChangeNotifier {
   List<Map<String, String>> availableOutputs = [];
   List<double> spectrumData = List.filled(32, 0.0);
   bool crossfadeEnabled = false;
+  double detectedBPM = 0.0;
+  bool beatPulse = false;
 
   // Messages d'état affichés à l'utilisateur (Import / Erreurs)
   String importStatus = '';
@@ -233,6 +236,13 @@ class AudioState extends ChangeNotifier {
         final v = ((t + i * 137) % 1000) / 1000.0;
         return (0.1 + 0.9 * v).clamp(0.0, 1.0);
       });
+      
+      // Beat pulse simulation (will be replaced by real BPM detection)
+      if (detectedBPM > 0) {
+        final beatInterval = 60000 / detectedBPM; // ms per beat
+        beatPulse = (t % beatInterval.toInt()) < (beatInterval / 4);
+      }
+      
       notifyListeners();
     });
   }
@@ -1096,16 +1106,24 @@ class PlayerScreen extends StatelessWidget {
               return Column(
                 children: [
                   const SizedBox(height: 20),
-                  // Artwork
-                  Container(
-                    width: 220,
-                    height: 220,
+                  // Artwork with beat pulse
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 100),
+                    width: _audio.beatPulse ? 230 : 220,
+                    height: _audio.beatPulse ? 230 : 220,
                     decoration: BoxDecoration(
                       color: const Color(0xFF1A1500),
                       borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: _gold, width: 1.5),
+                      border: Border.all(
+                        color: _audio.beatPulse ? _gold.withOpacity(0.8) : _gold,
+                        width: _audio.beatPulse ? 2.5 : 1.5,
+                      ),
                       boxShadow: [
-                        BoxShadow(color: _gold.withOpacity(0.15), blurRadius: 40, spreadRadius: 5),
+                        BoxShadow(
+                          color: _gold.withOpacity(_audio.beatPulse ? 0.3 : 0.15),
+                          blurRadius: _audio.beatPulse ? 50 : 40,
+                          spreadRadius: _audio.beatPulse ? 8 : 5,
+                        ),
                       ],
                     ),
                     child: const Icon(Icons.music_note, size: 90, color: _gold),
@@ -1181,19 +1199,31 @@ class PlayerScreen extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 12),
-                  // Titre
+                  // Titre + BPM
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 40),
-                    child: Text(
-                      track?.title ?? 'Aucune piste',
-                      style: const TextStyle(
-                        fontSize: 16,
-                        color: Colors.white,
-                        fontWeight: FontWeight.w500,
-                      ),
-                      textAlign: TextAlign.center,
-                      overflow: TextOverflow.ellipsis,
-                      maxLines: 2,
+                    child: Column(
+                      children: [
+                        Text(
+                          track?.title ?? 'Aucune piste',
+                          style: const TextStyle(
+                            fontSize: 16,
+                            color: Colors.white,
+                            fontWeight: FontWeight.w500,
+                          ),
+                          textAlign: TextAlign.center,
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 2,
+                        ),
+                        if (_audio.detectedBPM > 0)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(
+                              '🎵 ${_audio.detectedBPM.toInt()} BPM',
+                              style: const TextStyle(color: _gold, fontSize: 11, letterSpacing: 1),
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                   if (_audio.queue.length > 1)
@@ -1801,6 +1831,38 @@ class _MixingConsoleScreenState extends State<MixingConsoleScreen> {
                 ),
               ],
             ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: () => _exportPreset(context),
+                    icon: const Icon(Icons.share, size: 16),
+                    label: const Text('PARTAGER'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF1565C0),
+                      foregroundColor: Colors.white,
+                      textStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: () => _importPreset(context),
+                    icon: const Icon(Icons.file_download, size: 16),
+                    label: const Text('IMPORTER'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF2E7D32),
+                      foregroundColor: Colors.white,
+                      textStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                    ),
+                  ),
+                ),
+              ],
+            ),
             if (_savedPresets.isNotEmpty) ...[
               const SizedBox(height: 12),
               const Text(
@@ -1918,6 +1980,113 @@ class _MixingConsoleScreenState extends State<MixingConsoleScreen> {
 
     if (confirm == true) {
       await _deletePreset(presetName);
+    }
+  }
+
+  Future<void> _exportPreset(BuildContext context) async {
+    try {
+      // Create JSON export
+      final export = {
+        'name': _currentPresetName ?? 'Custom Config',
+        'author': 'Cinema Audio Luxe User',
+        'version': '1.0',
+        'effects': _fx,
+      };
+      
+      final jsonString = const JsonEncoder.withIndent('  ').convert(export);
+      
+      // Copy to clipboard
+      await Clipboard.setData(ClipboardData(text: jsonString));
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✅ Configuration copiée dans le presse-papiers!\nPartagez-la avec vos amis'),
+            backgroundColor: Color(0xFF2E7D32),
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      AppLogger.log('❌ Export error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Erreur lors de l\'export'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _importPreset(BuildContext context) async {
+    try {
+      // Get from clipboard
+      final clipData = await Clipboard.getData('text/plain');
+      if (clipData?.text == null || clipData!.text!.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Presse-papiers vide. Copiez d\'abord une configuration.'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+      
+      // Parse JSON
+      final json = jsonDecode(clipData.text!) as Map<String, dynamic>;
+      final name = json['name'] as String? ?? 'Imported';
+      final effects = json['effects'] as Map<String, dynamic>?;
+      
+      if (effects == null) {
+        throw Exception('Invalid preset format');
+      }
+      
+      // Apply effects
+      final newFx = Map<String, double>.from(_fx);
+      effects.forEach((key, value) {
+        if (newFx.containsKey(key) && value is num) {
+          newFx[key] = value.toDouble();
+        }
+      });
+      
+      setState(() {
+        _fx.clear();
+        _fx.addAll(newFx);
+        _currentPresetName = name;
+      });
+      
+      // Apply to native
+      for (final entry in newFx.entries) {
+        try {
+          await _ch.invokeMethod('setEffect', {'effect': entry.key, 'value': entry.value});
+          await Future.delayed(const Duration(milliseconds: 50));
+        } catch (e) {
+          AppLogger.log('❌ Error setting ${entry.key}: $e');
+        }
+      }
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✅ Configuration "$name" importée!'),
+            backgroundColor: const Color(0xFF1565C0),
+          ),
+        );
+      }
+    } catch (e) {
+      AppLogger.log('❌ Import error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Erreur: format invalide'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 

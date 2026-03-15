@@ -44,6 +44,10 @@ import Accelerate
   private var player2: AVAudioPlayerNode?
   private var crossfadeEnabled = false
   private var crossfadeDuration: Double = 2.0
+  
+  // INNOVATION: Preloading
+  private var preloadedFile: AVAudioFile?
+  private var preloadedIndex: Int = -1
 
   override func application(
     _ application: UIApplication,
@@ -560,6 +564,10 @@ import Accelerate
       if shuffleEnabled && !paths.isEmpty {
         buildShuffleOrder()
       }
+      
+      // Preload next track
+      preloadNextTrack()
+      
       channel?.invokeMethod("log", arguments: "✅ Playlist loaded with \(paths.count) tracks")
     } catch {
       channel?.invokeMethod("log", arguments: "❌ loadPlaylist error: \(error)")
@@ -591,6 +599,9 @@ import Accelerate
       isPlaying = true
       startPositionMonitoring()
       updateNowPlaying()
+      
+      // Preload next track in background
+      preloadNextTrack()
       
       // Notify Flutter
       DispatchQueue.main.async { [weak self] in
@@ -1078,6 +1089,39 @@ import Accelerate
   }
   
   // MARK: - Crossfade Playback
+  
+  private func preloadNextTrack() {
+    guard !playlist.isEmpty else { return }
+    
+    // Determine next track index
+    var nextIdx: Int?
+    if shuffleEnabled {
+      if !shuffledIndices.isEmpty && shufflePosition + 1 < shuffledIndices.count {
+        nextIdx = shuffledIndices[shufflePosition + 1]
+      }
+    } else {
+      if currentIndex + 1 < playlist.count {
+        nextIdx = currentIndex + 1
+      } else if repeatMode == 1 {
+        nextIdx = 0
+      }
+    }
+    
+    guard let idx = nextIdx, idx != preloadedIndex else { return }
+    
+    // Preload in background
+    DispatchQueue.global(qos: .background).async { [weak self] in
+      guard let self = self else { return }
+      do {
+        let nextPath = self.playlist[idx]
+        self.preloadedFile = try AVAudioFile(forReading: URL(fileURLWithPath: nextPath))
+        self.preloadedIndex = idx
+        self.channel?.invokeMethod("log", arguments: "✅ Preloaded track \(idx)")
+      } catch {
+        self.channel?.invokeMethod("log", arguments: "❌ Preload error: \(error)")
+      }
+    }
+  }
   
   private func playCrossfade(nextPath: String) {
     guard crossfadeEnabled, let player2 = player2 else {
