@@ -76,6 +76,22 @@ class AudioState extends ChangeNotifier {
   bool crossfadeEnabled = false;
   double detectedBPM = 0.0;
   bool beatPulse = false;
+  
+  // Statistics
+  int _totalPlayTime = 0; // seconds
+  int _tracksPlayed = 0;
+  int get totalPlayTime => _totalPlayTime;
+  int get tracksPlayed => _tracksPlayed;
+  String get formattedPlayTime {
+    final hours = _totalPlayTime ~/ 3600;
+    final minutes = (_totalPlayTime % 3600) ~/ 60;
+    return '${hours}h ${minutes}min';
+  }
+  
+  // Smart playlists
+  List<AudioTrack> get energeticTracks => queue.where((t) => _getEstimatedBPM(t.title) > 120).toList();
+  List<AudioTrack> get chillTracks => queue.where((t) => _getEstimatedBPM(t.title) < 100).toList();
+  List<AudioTrack> get bassTracks => queue.where((t) => _isBassHeavy(t.title)).toList();
 
   // Messages d'état affichés à l'utilisateur (Import / Erreurs)
   String importStatus = '';
@@ -105,6 +121,10 @@ class AudioState extends ChangeNotifier {
       shuffleEnabled = prefs.getBool('shuffleEnabled') ?? false;
       repeatMode = prefs.getInt('repeatMode') ?? 0;
       currentPreset = prefs.getString('currentPreset') ?? 'cinema';
+      
+      // Load stats
+      _totalPlayTime = prefs.getInt('totalPlayTime') ?? 0;
+      _tracksPlayed = prefs.getInt('tracksPlayed') ?? 0;
     } catch (e) {
       debugPrint('Error loading audio settings: $e');
     }
@@ -116,6 +136,10 @@ class AudioState extends ChangeNotifier {
       await prefs.setBool('shuffleEnabled', shuffleEnabled);
       await prefs.setInt('repeatMode', repeatMode);
       await prefs.setString('currentPreset', currentPreset);
+      
+      // Save stats
+      await prefs.setInt('totalPlayTime', _totalPlayTime);
+      await prefs.setInt('tracksPlayed', _tracksPlayed);
     } catch (e) {
       debugPrint('Error saving audio settings: $e');
     }
@@ -255,6 +279,8 @@ class AudioState extends ChangeNotifier {
             final newIndex = (call.arguments as Map)['index'] as int?;
             if (newIndex != null && newIndex >= 0 && newIndex < queue.length) {
               _library.jumpTo(newIndex);
+              _tracksPlayed++;
+              _saveAudioSettings();
               AppLogger.log('✅ Track changed to index $newIndex');
             }
           }
@@ -524,33 +550,86 @@ class AudioState extends ChangeNotifier {
   }
 
   void _detectBPM(String title) {
+    detectedBPM = _getEstimatedBPM(title);
+    AppLogger.log('🎵 Detected BPM: ${detectedBPM.toInt()} for "$title"');
+  }
+  
+  double _getEstimatedBPM(String title) {
     final lower = title.toLowerCase();
     
     // Simple genre-based BPM estimation
     if (lower.contains('trap') || lower.contains('hip') || lower.contains('rap')) {
-      detectedBPM = 140.0;
+      return 140.0;
     } else if (lower.contains('house') || lower.contains('edm') || lower.contains('dance')) {
-      detectedBPM = 128.0;
+      return 128.0;
     } else if (lower.contains('techno')) {
-      detectedBPM = 135.0;
+      return 135.0;
     } else if (lower.contains('dubstep') || lower.contains('bass')) {
-      detectedBPM = 140.0;
+      return 140.0;
     } else if (lower.contains('pop') || lower.contains('mood')) {
-      detectedBPM = 120.0;
+      return 120.0;
     } else if (lower.contains('rock') || lower.contains('metal')) {
-      detectedBPM = 130.0;
+      return 130.0;
     } else if (lower.contains('jazz') || lower.contains('blues')) {
-      detectedBPM = 90.0;
+      return 90.0;
     } else if (lower.contains('classical') || lower.contains('symphony')) {
-      detectedBPM = 80.0;
+      return 80.0;
     } else if (lower.contains('chill') || lower.contains('lofi')) {
-      detectedBPM = 85.0;
+      return 85.0;
     } else {
-      // Default BPM for unknown genres
-      detectedBPM = 120.0;
+      return 120.0; // Default
     }
-    
-    AppLogger.log('🎵 Detected BPM: ${detectedBPM.toInt()} for "$title"');
+  }
+  
+  bool _isBassHeavy(String title) {
+    final lower = title.toLowerCase();
+    return lower.contains('bass') || lower.contains('trap') || 
+           lower.contains('dubstep') || lower.contains('hip');
+  }
+  
+  Future<void> loadSmartPlaylist(String type) async {
+    try {
+      List<AudioTrack> tracks;
+      switch (type) {
+        case 'energetic':
+          tracks = energeticTracks;
+          AppLogger.log('🔥 Loading energetic playlist (${tracks.length} tracks)');
+          break;
+        case 'chill':
+          tracks = chillTracks;
+          AppLogger.log('😌 Loading chill playlist (${tracks.length} tracks)');
+          break;
+        case 'bass':
+          tracks = bassTracks;
+          AppLogger.log('🔊 Loading bass playlist (${tracks.length} tracks)');
+          break;
+        default:
+          tracks = queue;
+      }
+      
+      if (tracks.isEmpty) {
+        AppLogger.log('⚠️ No tracks found for playlist type: $type');
+        return;
+      }
+      
+      // Update library queue
+      _library.clearQueue();
+      for (final track in tracks) {
+        _library.addToQueue(track);
+      }
+      
+      // Sync with Swift
+      await _syncPlaylist();
+      
+      // Play first track
+      _library.jumpTo(0);
+      await _playValidTrack();
+      
+      notifyListeners();
+    } catch (e, stack) {
+      AppLogger.log('❌ loadSmartPlaylist error: $e');
+      AppLogger.log(stack.toString());
+    }
   }
 
   // CORRECTION : getDuration retourne 0.0 en cas d'erreur, jamais d'exception
@@ -848,6 +927,15 @@ class AudioState extends ChangeNotifier {
         try {
           final pos = await _ch.invokeMethod<double>('getPosition') ?? position;
           position = pos.clamp(0.0, duration);
+          
+          // Update play time stats (every 0.5s = increment by 1 every 2 ticks)
+          if (_ % 2 == 0) {
+            _totalPlayTime++;
+            if (_totalPlayTime % 60 == 0) {
+              _saveAudioSettings(); // Save every minute
+            }
+          }
+          
           notifyListeners();
         } catch (_) {}
       });
@@ -924,6 +1012,7 @@ class _MainShellState extends State<MainShell> {
       const PlayerScreen(),
       const QueueScreen(),
       const MixingConsoleScreen(),
+      const StatsScreen(),
     ];
     return Scaffold(
       body: pages[_tab],
@@ -955,6 +1044,7 @@ class _MainShellState extends State<MainShell> {
               NavigationDestination(icon: Icon(Icons.play_circle_outline), label: 'Lecteur'),
               NavigationDestination(icon: Icon(Icons.queue_music), label: 'File'),
               NavigationDestination(icon: Icon(Icons.tune), label: 'Console'),
+              NavigationDestination(icon: Icon(Icons.bar_chart), label: 'Stats'),
             ],
           ),
         ],
@@ -1462,6 +1552,53 @@ class QueueScreen extends StatelessWidget {
         title: const Text("FILE D'ATTENTE",
             style: TextStyle(letterSpacing: 3, fontSize: 14, color: _gold)),
         actions: [
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.auto_awesome, color: _gold),
+            tooltip: 'Playlists intelligentes',
+            onSelected: (value) async {
+              await _audio.loadSmartPlaylist(value);
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Playlist "$value" chargée'),
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
+              }
+            },
+            itemBuilder: (context) => [
+              PopupMenuItem(
+                value: 'energetic',
+                child: Row(
+                  children: [
+                    const Icon(Icons.bolt, color: Colors.orange, size: 20),
+                    const SizedBox(width: 8),
+                    Text('Énergique (${_audio.energeticTracks.length})'),
+                  ],
+                ),
+              ),
+              PopupMenuItem(
+                value: 'chill',
+                child: Row(
+                  children: [
+                    const Icon(Icons.spa, color: Colors.blue, size: 20),
+                    const SizedBox(width: 8),
+                    Text('Chill (${_audio.chillTracks.length})'),
+                  ],
+                ),
+              ),
+              PopupMenuItem(
+                value: 'bass',
+                child: Row(
+                  children: [
+                    const Icon(Icons.graphic_eq, color: Colors.red, size: 20),
+                    const SizedBox(width: 8),
+                    Text('Bass (${_audio.bassTracks.length})'),
+                  ],
+                ),
+              ),
+            ],
+          ),
           TextButton.icon(
             onPressed: () async {
               await _audio._cleanupMissingTracks();
@@ -2279,6 +2416,222 @@ class DebugLogScreen extends StatelessWidget {
                   );
                 },
               ),
+      ),
+    );
+  }
+}
+
+// ─── Écran 5 : Statistiques ──────────────────────────────────────────────────
+class StatsScreen extends StatelessWidget {
+  const StatsScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: _dark,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        title: const Text('STATISTIQUES',
+            style: TextStyle(letterSpacing: 3, fontSize: 14, color: _gold)),
+      ),
+      body: ListenableBuilder(
+        listenable: _audio,
+        builder: (_, __) {
+          return SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Header
+                const Center(
+                  child: Icon(Icons.bar_chart, size: 80, color: _gold),
+                ),
+                const SizedBox(height: 16),
+                const Center(
+                  child: Text(
+                    'VOS STATISTIQUES D\'ÉCOUTE',
+                    style: TextStyle(
+                      color: _gold,
+                      fontSize: 16,
+                      letterSpacing: 2,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 32),
+                
+                // Stats cards
+                _StatCard(
+                  icon: Icons.access_time,
+                  title: 'TEMPS D\'ÉCOUTE TOTAL',
+                  value: _audio.formattedPlayTime,
+                  color: Colors.blue,
+                ),
+                const SizedBox(height: 16),
+                _StatCard(
+                  icon: Icons.music_note,
+                  title: 'PISTES JOUÉES',
+                  value: '${_audio.tracksPlayed}',
+                  color: Colors.green,
+                ),
+                const SizedBox(height: 16),
+                _StatCard(
+                  icon: Icons.library_music,
+                  title: 'BIBLIOTHÈQUE',
+                  value: '${_audio.queue.length} pistes',
+                  color: Colors.purple,
+                ),
+                const SizedBox(height: 16),
+                _StatCard(
+                  icon: Icons.bolt,
+                  title: 'PISTES ÉNERGIQUES',
+                  value: '${_audio.energeticTracks.length}',
+                  color: Colors.orange,
+                ),
+                const SizedBox(height: 16),
+                _StatCard(
+                  icon: Icons.spa,
+                  title: 'PISTES CHILL',
+                  value: '${_audio.chillTracks.length}',
+                  color: Colors.cyan,
+                ),
+                const SizedBox(height: 16),
+                _StatCard(
+                  icon: Icons.graphic_eq,
+                  title: 'PISTES BASS',
+                  value: '${_audio.bassTracks.length}',
+                  color: Colors.red,
+                ),
+                const SizedBox(height: 32),
+                
+                // Current session
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1A1A1A),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: _gold.withOpacity(0.3)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'SESSION ACTUELLE',
+                        style: TextStyle(
+                          color: _gold,
+                          fontSize: 12,
+                          letterSpacing: 2,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      _InfoRow('Preset actif', _audio.currentPreset.toUpperCase()),
+                      _InfoRow('Shuffle', _audio.shuffleEnabled ? 'Activé' : 'Désactivé'),
+                      _InfoRow('Repeat', _audio.repeatMode == 0 ? 'Off' : _audio.repeatMode == 1 ? 'All' : 'One'),
+                      _InfoRow('Crossfade', _audio.crossfadeEnabled ? 'Activé' : 'Désactivé'),
+                      if (_audio.detectedBPM > 0)
+                        _InfoRow('BPM actuel', '${_audio.detectedBPM.toInt()}'),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _StatCard extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String value;
+  final Color color;
+
+  const _StatCard({
+    required this.icon,
+    required this.title,
+    required this.value,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [color.withOpacity(0.2), color.withOpacity(0.05)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: color, size: 32),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.7),
+                    fontSize: 11,
+                    letterSpacing: 1,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  value,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _InfoRow extends StatelessWidget {
+  final String label;
+  final String value;
+
+  const _InfoRow(this.label, this.value);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(color: Colors.white54, fontSize: 13),
+          ),
+          Text(
+            value,
+            style: const TextStyle(color: _gold, fontSize: 13, fontWeight: FontWeight.w500),
+          ),
+        ],
       ),
     );
   }
