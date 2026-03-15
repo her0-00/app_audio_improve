@@ -613,19 +613,17 @@ class AudioState extends ChangeNotifier {
   Future<void> seek(double pos) async {
     _isUserSeeking = true;
     try {
-      // Vérifier que la durée est valide avant de seek
       if (duration <= 0) {
         AppLogger.log('⚠️ Cannot seek: duration is 0');
         _isUserSeeking = false;
         return;
       }
-      // Limiter strictement la position à 95% de la durée pour éviter les crashes
       final maxPos = duration * 0.95;
       final clampedPos = pos.clamp(0.0, maxPos);
       AppLogger.log('🎯 Seeking to $clampedPos (max: $maxPos)');
       await _ch.invokeMethod('seek', {'position': clampedPos});
       position = clampedPos;
-      notifyListeners();
+      // NE PAS appeler notifyListeners ici - ça déclenche next()
     } catch (e, stack) {
       AppLogger.log('❌ CRASH seek: $e');
       AppLogger.log(stack.toString());
@@ -638,6 +636,10 @@ class AudioState extends ChangeNotifier {
 
   Future<void> next() async {
     try {
+      if (queue.length <= 1) {
+        AppLogger.log('⚠️ Next: only 1 track in queue');
+        return;
+      }
       await _ch.invokeMethod('next');
     } catch (e, stack) {
       AppLogger.log('❌ CRASH next: $e');
@@ -647,6 +649,12 @@ class AudioState extends ChangeNotifier {
 
   Future<void> previous() async {
     try {
+      if (queue.length <= 1) {
+        AppLogger.log('⚠️ Previous: only 1 track in queue');
+        // Si 1 seule piste, revenir au début
+        await seek(0);
+        return;
+      }
       await _ch.invokeMethod('previous');
     } catch (e, stack) {
       AppLogger.log('❌ CRASH previous: $e');
