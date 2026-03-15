@@ -258,6 +258,17 @@ class AudioState extends ChangeNotifier {
           _posTimer?.cancel();
           notifyListeners();
           break;
+        case 'onPlaybackStateChanged':
+          if (call.arguments is Map) {
+            final playing = (call.arguments as Map)['isPlaying'] as bool? ?? false;
+            isPlaying = playing;
+            if (!playing) {
+              _posTimer?.cancel();
+            }
+            AppLogger.log('🎵 Playback state changed: ${playing ? "playing" : "paused"}');
+            notifyListeners();
+          }
+          break;
         case 'onDeviceChanged':
           if (call.arguments is Map) {
             currentDevice = (call.arguments as Map)['device']?.toString() ?? 'speaker';

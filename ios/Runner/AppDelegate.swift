@@ -416,14 +416,40 @@ import Accelerate
 
   private func setupRemoteControls() {
     let rc = MPRemoteCommandCenter.shared()
-    rc.playCommand.addTarget  { [weak self] _ in self?.play();         return .success }
-    rc.pauseCommand.addTarget { [weak self] _ in self?.pause();        return .success }
-    rc.nextTrackCommand.addTarget     { [weak self] _ in self?.playNext();     return .success }
-    rc.previousTrackCommand.addTarget { [weak self] _ in self?.playPrevious(); return .success }
-    rc.changePlaybackPositionCommand.addTarget { [weak self] event in
-      if let e = event as? MPChangePlaybackPositionCommandEvent { self?.seek(to: e.positionTime) }
+    rc.playCommand.addTarget  { [weak self] _ in 
+      self?.play()
+      return .success 
+    }
+    rc.pauseCommand.addTarget { [weak self] _ in 
+      self?.pause()
+      return .success 
+    }
+    rc.stopCommand.addTarget { [weak self] _ in
+      self?.pause()
       return .success
     }
+    rc.nextTrackCommand.addTarget { [weak self] _ in 
+      self?.playNext()
+      return .success 
+    }
+    rc.previousTrackCommand.addTarget { [weak self] _ in 
+      self?.playPrevious()
+      return .success 
+    }
+    rc.changePlaybackPositionCommand.addTarget { [weak self] event in
+      if let e = event as? MPChangePlaybackPositionCommandEvent { 
+        self?.seek(to: e.positionTime) 
+      }
+      return .success
+    }
+    
+    // Enable all commands
+    rc.playCommand.isEnabled = true
+    rc.pauseCommand.isEnabled = true
+    rc.stopCommand.isEnabled = true
+    rc.nextTrackCommand.isEnabled = true
+    rc.previousTrackCommand.isEnabled = true
+    rc.changePlaybackPositionCommand.isEnabled = true
   }
 
   private func updateNowPlaying() {
@@ -506,6 +532,12 @@ import Accelerate
       isPlaying = true
       startPositionMonitoring()
       updateNowPlaying()
+      
+      // Notify Flutter that playback started
+      DispatchQueue.main.async { [weak self] in
+        self?.channel?.invokeMethod("onPlaybackStateChanged", arguments: ["isPlaying": true])
+      }
+      
       channel?.invokeMethod("log", arguments: "✅ Playing")
     } catch {
       channel?.invokeMethod("log", arguments: "❌ CRASH play: \(error)")
@@ -544,6 +576,12 @@ import Accelerate
 
       isPlaying = false
       updateNowPlaying()
+      
+      // Notify Flutter that playback stopped
+      DispatchQueue.main.async { [weak self] in
+        self?.channel?.invokeMethod("onPlaybackStateChanged", arguments: ["isPlaying": false])
+      }
+      
       channel?.invokeMethod("log", arguments: "✅ Paused")
     } catch {
       channel?.invokeMethod("log", arguments: "❌ CRASH pause: \(error)")
