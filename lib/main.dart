@@ -784,7 +784,7 @@ class AudioState extends ChangeNotifier {
   void _startTimer() {
     try {
       _posTimer?.cancel();
-      _posTimer = Timer.periodic(const Duration(milliseconds: 300), (_) async {
+      _posTimer = Timer.periodic(const Duration(milliseconds: 500), (_) async {
         if (!isPlaying || _isUserSeeking) return;
         try {
           final pos = await _ch.invokeMethod<double>('getPosition') ?? position;

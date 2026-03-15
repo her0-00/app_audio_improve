@@ -454,13 +454,41 @@ import Accelerate
 
   private func updateNowPlaying() {
     var info = [String: Any]()
-    info[MPMediaItemPropertyTitle] = playlist.isEmpty
+    
+    // Track info
+    let trackTitle = playlist.isEmpty
       ? "Cinema Audio Luxe"
       : URL(fileURLWithPath: playlist[currentIndex]).deletingPathExtension().lastPathComponent
-    info[MPMediaItemPropertyPlaybackDuration] = getDuration()
-    info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = getPosition()
+    
+    info[MPMediaItemPropertyTitle] = trackTitle
+    info[MPMediaItemPropertyArtist] = "Cinema Audio Luxe"
+    info[MPMediaItemPropertyAlbumTitle] = "Playlist"
+    
+    // Timing info
+    let duration = getDuration()
+    let position = getPosition()
+    info[MPMediaItemPropertyPlaybackDuration] = duration
+    info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = position
     info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
+    
+    // Track number
+    if !playlist.isEmpty {
+      info[MPMediaItemPropertyAlbumTrackNumber] = currentIndex + 1
+      info[MPMediaItemPropertyAlbumTrackCount] = playlist.count
+    }
+    
+    // Default artwork
+    if let image = UIImage(systemName: "music.note") {
+      info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: CGSize(width: 512, height: 512)) { _ in image }
+    }
+    
     MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    
+    // Update remote command availability
+    let rc = MPRemoteCommandCenter.shared()
+    rc.previousTrackCommand.isEnabled = !playlist.isEmpty && (currentIndex > 0 || repeatMode == 1)
+    rc.nextTrackCommand.isEnabled = !playlist.isEmpty && (currentIndex < playlist.count - 1 || repeatMode == 1)
+    rc.changePlaybackPositionCommand.isEnabled = duration > 0
   }
 
   // MARK: - Playback
@@ -525,7 +553,7 @@ import Accelerate
         channel?.invokeMethod("log", arguments: "⚠️ Nothing to play")
         return
       }
-      // NE PAS utiliser completion handler - utiliser Timer à la place
+      
       player.scheduleSegment(file, startingFrame: startFrame,
         frameCount: AVAudioFrameCount(remaining), at: nil, completionHandler: nil)
       player.play()
@@ -533,7 +561,7 @@ import Accelerate
       startPositionMonitoring()
       updateNowPlaying()
       
-      // Notify Flutter that playback started
+      // Notify Flutter
       DispatchQueue.main.async { [weak self] in
         self?.channel?.invokeMethod("onPlaybackStateChanged", arguments: ["isPlaying": true])
       }
@@ -546,14 +574,21 @@ import Accelerate
   
   private func startPositionMonitoring() {
     positionTimer?.invalidate()
-    positionTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+    positionTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
       guard let self = self, self.isPlaying else { return }
+      
+      // Update Now Playing info every second
+      self.updateNowPlaying()
+      
       let pos = self.getPosition()
       let dur = self.getDuration()
-      // Détecter la fin réelle (position >= 99% de la durée)
-      if pos >= dur * 0.99 {
+      
+      // Detect track end (position >= 99% of duration)
+      if dur > 0 && pos >= dur * 0.99 {
         self.positionTimer?.invalidate()
-        self.onTrackFinished()
+        DispatchQueue.main.async {
+          self.onTrackFinished()
+        }
       }
     }
   }
@@ -568,6 +603,7 @@ import Accelerate
       positionTimer?.invalidate()
       lastSeekTime    = getPosition()
       seekFrameOffset = AVAudioFramePosition(lastSeekTime * (audioFile?.processingFormat.sampleRate ?? 44100))
+      
       if let player = player {
         player.pause()
       } else {
@@ -577,7 +613,7 @@ import Accelerate
       isPlaying = false
       updateNowPlaying()
       
-      // Notify Flutter that playback stopped
+      // Notify Flutter
       DispatchQueue.main.async { [weak self] in
         self?.channel?.invokeMethod("onPlaybackStateChanged", arguments: ["isPlaying": false])
       }
@@ -595,26 +631,34 @@ import Accelerate
         return
       }
       
-      // Limiter strictement la position pour éviter le callback onTrackFinished
-      let maxPosition = getDuration() * 0.98  // 98% max pour éviter la fin
-      let safePosition = min(position, maxPosition)
+      let duration = getDuration()
+      guard duration > 0 else {
+        channel?.invokeMethod("log", arguments: "⚠️ Seek: invalid duration")
+        return
+      }
+      
+      // Clamp position to valid range
+      let safePosition = max(0.0, min(position, duration - 0.1))
       
       let framePos  = AVAudioFramePosition(safePosition * file.processingFormat.sampleRate)
       let remaining = file.length - framePos
-      guard remaining > 100 else {  // Au moins 100 frames restantes
+      guard remaining > 100 else {
         channel?.invokeMethod("log", arguments: "⚠️ Seek: too close to end")
         return
       }
+      
       seekFrameOffset = framePos
       lastSeekTime = safePosition
       let wasPlaying = isPlaying
-      player.stop()
       
-      // NE PAS utiliser le callback completion pour éviter onTrackFinished pendant seek
+      player.stop()
       player.scheduleSegment(file, startingFrame: framePos,
         frameCount: AVAudioFrameCount(remaining), at: nil, completionHandler: nil)
       
-      if wasPlaying { player.play() }
+      if wasPlaying { 
+        player.play() 
+      }
+      
       updateNowPlaying()
       channel?.invokeMethod("log", arguments: "✅ Seeked to \(safePosition)")
     } catch {
