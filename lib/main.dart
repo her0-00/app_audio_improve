@@ -962,7 +962,7 @@ class CinemaAudioLuxeApp extends StatelessWidget {
     return ListenableBuilder(
       listenable: _audio,
       builder: (_, __) => MaterialApp(
-        title: 'Cinema Audio Luxe',
+        title: 'Cinema Audio Pro',
         debugShowCheckedModeBanner: false,
         theme: ThemeData.dark().copyWith(
           scaffoldBackgroundColor: const Color(0xFF080808),
@@ -1134,7 +1134,7 @@ class ImportScreen extends StatelessWidget {
               children: [
                 const Icon(Icons.theaters, size: 90, color: _gold),
                 const SizedBox(height: 20),
-                const Text('CINEMA AUDIO LUXE',
+                const Text('CINEMA AUDIO PRO',
                     style: TextStyle(
                       fontSize: 24,
                       fontWeight: FontWeight.w300,
