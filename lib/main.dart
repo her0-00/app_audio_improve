@@ -1201,11 +1201,6 @@ class PlayerScreen extends StatelessWidget {
                           onChangeStart: (_) {
                             _audio._isUserSeeking = true;
                           },
-                          onChangeEnd: (_) {
-                            Future.delayed(const Duration(milliseconds: 500), () {
-                              _audio._isUserSeeking = false;
-                            });
-                          },
                           onChanged: (value) {
                             // Only update UI, don't seek on every change
                             _audio.position = value.clamp(0.0, _audio.duration);
@@ -1213,6 +1208,9 @@ class PlayerScreen extends StatelessWidget {
                           onChangeEnd: (value) {
                             // Seek only when user releases the slider
                             _audio.seek(value);
+                            Future.delayed(const Duration(milliseconds: 500), () {
+                              _audio._isUserSeeking = false;
+                            });
                           },
                         ),
                         Row(
