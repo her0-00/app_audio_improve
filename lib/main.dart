@@ -1250,8 +1250,13 @@ class PlayerScreen extends StatelessWidget {
             listenable: _audio,
             builder: (_, __) {
               final track = _audio.current;
-              return Column(
-                children: [
+              return SingleChildScrollView(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    minHeight: MediaQuery.of(context).size.height - MediaQuery.of(context).padding.top - MediaQuery.of(context).padding.bottom,
+                  ),
+                  child: Column(
+                    children: [
                   const SizedBox(height: 20),
                   // Artwork with beat pulse
                   AnimatedContainer(
@@ -1351,16 +1356,19 @@ class PlayerScreen extends StatelessWidget {
                     padding: const EdgeInsets.symmetric(horizontal: 40),
                     child: Column(
                       children: [
-                        Text(
-                          track?.title ?? 'Aucune piste',
-                          style: const TextStyle(
-                            fontSize: 16,
-                            color: Colors.white,
-                            fontWeight: FontWeight.w500,
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxHeight: 60),
+                          child: SingleChildScrollView(
+                            child: Text(
+                              track?.title ?? 'Aucune piste',
+                              style: const TextStyle(
+                                fontSize: 16,
+                                color: Colors.white,
+                                fontWeight: FontWeight.w500,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
                           ),
-                          textAlign: TextAlign.center,
-                          overflow: TextOverflow.ellipsis,
-                          maxLines: 2,
                         ),
                         if (_audio.detectedBPM > 0)
                           Padding(
@@ -1522,7 +1530,9 @@ class PlayerScreen extends StatelessWidget {
                         style: TextStyle(color: _gold, fontSize: 10, letterSpacing: 2),
                       ),
                     ),
-                ],
+                    ],
+                  ),
+                ),
               );
             },
           ),
