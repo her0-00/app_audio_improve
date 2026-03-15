@@ -362,37 +362,47 @@ import Accelerate
   // MARK: - Presets
 
   func applyPreset(_ preset: String) {
-    currentPreset = preset
-    guard let reverb = reverb, let delay = delay,
-          let distortion = distortion, let eq = eq else { return }
+    do {
+      channel?.invokeMethod("log", arguments: "applyPreset(\(preset))")
+      currentPreset = preset
+      guard let reverb = reverb, let delay = delay,
+            let distortion = distortion, let eq = eq else {
+        channel?.invokeMethod("log", arguments: "⚠️ Audio units not ready")
+        return
+      }
 
-    switch preset {
-    case "cinema":
-      reverb.loadFactoryPreset(.largeHall2); reverb.wetDryMix = 30
-      delay.wetDryMix = 15; delay.delayTime = 0.28; distortion.wetDryMix = 3
-      eq.bands[0].gain = 5; eq.bands[9].gain = 4
-      audioEngine?.mainMixerNode.outputVolume = 1.0; applyCrossfeed(0.3)
-    case "concert":
-      reverb.loadFactoryPreset(.largeRoom2); reverb.wetDryMix = 40
-      delay.wetDryMix = 20; delay.delayTime = 0.35; distortion.wetDryMix = 5
-      eq.bands[0].gain = 3; eq.bands[5].gain = 4; eq.bands[9].gain = 5
-      audioEngine?.mainMixerNode.outputVolume = 1.0; applyCrossfeed(0.2)
-    case "studio":
-      reverb.loadFactoryPreset(.smallRoom); reverb.wetDryMix = 8
-      delay.wetDryMix = 5; delay.delayTime = 0.1; distortion.wetDryMix = 2
-      applyEQBands(defaultEQBands())
-      audioEngine?.mainMixerNode.outputVolume = 1.0; applyCrossfeed(0.0)
-    case "bassBoost":
-      reverb.wetDryMix = 15; delay.wetDryMix = 8; distortion.wetDryMix = 6
-      eq.bands[0].gain = 10; eq.bands[1].gain = 8; eq.bands[2].gain = 5; eq.bands[3].gain = -2
-      audioEngine?.mainMixerNode.outputVolume = 1.0; applyCrossfeed(0.1)
-    case "vocal":
-      reverb.loadFactoryPreset(.mediumHall); reverb.wetDryMix = 20
-      delay.wetDryMix = 10; delay.delayTime = 0.15; distortion.wetDryMix = 4
-      eq.bands[4].gain = 3; eq.bands[5].gain = 6; eq.bands[6].gain = 7
-      eq.bands[7].gain = 5; eq.bands[0].gain = -2
-      audioEngine?.mainMixerNode.outputVolume = 1.0; applyCrossfeed(0.25)
-    default: break
+      switch preset {
+      case "cinema":
+        reverb.loadFactoryPreset(.largeHall2); reverb.wetDryMix = 30
+        delay.wetDryMix = 15; delay.delayTime = 0.28; distortion.wetDryMix = 3
+        eq.bands[0].gain = 5; eq.bands[9].gain = 4
+        audioEngine?.mainMixerNode.outputVolume = 1.0; applyCrossfeed(0.3)
+      case "concert":
+        reverb.loadFactoryPreset(.largeRoom2); reverb.wetDryMix = 40
+        delay.wetDryMix = 20; delay.delayTime = 0.35; distortion.wetDryMix = 5
+        eq.bands[0].gain = 3; eq.bands[5].gain = 4; eq.bands[9].gain = 5
+        audioEngine?.mainMixerNode.outputVolume = 1.0; applyCrossfeed(0.2)
+      case "studio":
+        reverb.loadFactoryPreset(.smallRoom); reverb.wetDryMix = 8
+        delay.wetDryMix = 5; delay.delayTime = 0.1; distortion.wetDryMix = 2
+        applyEQBands(defaultEQBands())
+        audioEngine?.mainMixerNode.outputVolume = 1.0; applyCrossfeed(0.0)
+      case "bassBoost":
+        reverb.wetDryMix = 15; delay.wetDryMix = 8; distortion.wetDryMix = 6
+        eq.bands[0].gain = 10; eq.bands[1].gain = 8; eq.bands[2].gain = 5; eq.bands[3].gain = -2
+        audioEngine?.mainMixerNode.outputVolume = 1.0; applyCrossfeed(0.1)
+      case "vocal":
+        reverb.loadFactoryPreset(.mediumHall); reverb.wetDryMix = 20
+        delay.wetDryMix = 10; delay.delayTime = 0.15; distortion.wetDryMix = 4
+        eq.bands[4].gain = 3; eq.bands[5].gain = 6; eq.bands[6].gain = 7
+        eq.bands[7].gain = 5; eq.bands[0].gain = -2
+        audioEngine?.mainMixerNode.outputVolume = 1.0; applyCrossfeed(0.25)
+      default: 
+        channel?.invokeMethod("log", arguments: "⚠️ Unknown preset: \(preset)")
+      }
+      channel?.invokeMethod("log", arguments: "✅ Preset \(preset) applied")
+    } catch {
+      channel?.invokeMethod("log", arguments: "❌ applyPreset error: \(error)")
     }
   }
 
@@ -714,27 +724,34 @@ import Accelerate
   // MARK: - Effects
 
   func setEffect(effect: String, value: Float) {
-    switch effect {
-    case "reverb":    reverb?.wetDryMix = value * 100
-    case "bass":
-      eq?.bands[0].gain = value * 14; eq?.bands[1].gain = value * 11; eq?.bands[2].gain = value * 8
-    case "volume":
-      audioEngine?.mainMixerNode.outputVolume = min(1.0, max(0.0, value))
-    case "delay":     delay?.wetDryMix = value * 50
-    case "warmth":    distortion?.wetDryMix = value * 20
-    case "clarity":
-      eq?.bands[6].gain = value * 8; eq?.bands[7].gain = value * 10; eq?.bands[8].gain = value * 12
-    case "presence":
-      eq?.bands[4].gain = value * 6; eq?.bands[5].gain = value * 8
-    case "pitch":     timePitch?.pitch = value * 400 - 200
-    case "crossfeed": applyCrossfeed(value)
-    case "exciter":   distortion?.wetDryMix = value * 15
-    case "compress":
-      if let au = compressor {
-        AudioUnitSetParameter(au.audioUnit, kDynamicsProcessorParam_Threshold,
-          kAudioUnitScope_Global, 0, Float(-40 + value * 30), 0)
+    do {
+      channel?.invokeMethod("log", arguments: "setEffect(\(effect), \(value))")
+      switch effect {
+      case "reverb":    reverb?.wetDryMix = value * 100
+      case "bass":
+        eq?.bands[0].gain = value * 14; eq?.bands[1].gain = value * 11; eq?.bands[2].gain = value * 8
+      case "volume":
+        audioEngine?.mainMixerNode.outputVolume = min(1.0, max(0.0, value))
+      case "delay":     delay?.wetDryMix = value * 50
+      case "warmth":    distortion?.wetDryMix = value * 20
+      case "clarity":
+        eq?.bands[6].gain = value * 8; eq?.bands[7].gain = value * 10; eq?.bands[8].gain = value * 12
+      case "presence":
+        eq?.bands[4].gain = value * 6; eq?.bands[5].gain = value * 8
+      case "pitch":     timePitch?.pitch = value * 400 - 200
+      case "crossfeed": applyCrossfeed(value)
+      case "exciter":   distortion?.wetDryMix = value * 15
+      case "compress":
+        if let au = compressor {
+          AudioUnitSetParameter(au.audioUnit, kDynamicsProcessorParam_Threshold,
+            kAudioUnitScope_Global, 0, Float(-40 + value * 30), 0)
+        }
+      default: 
+        channel?.invokeMethod("log", arguments: "⚠️ Unknown effect: \(effect)")
       }
-    default: break
+      channel?.invokeMethod("log", arguments: "✅ Effect \(effect) applied")
+    } catch {
+      channel?.invokeMethod("log", arguments: "❌ setEffect error: \(error)")
     }
   }
 

@@ -662,14 +662,17 @@ class AudioState extends ChangeNotifier {
   }
 
   Future<void> setPreset(String preset) async {
-    currentPreset = preset;
-    await _saveAudioSettings();
     try {
+      AppLogger.log('🎵 Changing preset to: $preset');
+      currentPreset = preset;
+      await _saveAudioSettings();
       await _ch.invokeMethod('setPreset', {'preset': preset});
-    } catch (e) {
-      debugPrint('setPreset error: $e');
+      AppLogger.log('✅ Preset changed successfully');
+      notifyListeners();
+    } catch (e, stack) {
+      AppLogger.log('❌ CRASH setPreset: $e');
+      AppLogger.log(stack.toString());
     }
-    notifyListeners();
   }
 
   Future<void> setShuffle(bool enabled) async {
@@ -1593,24 +1596,39 @@ class _MixingConsoleScreenState extends State<MixingConsoleScreen> {
   }
 
   Future<void> _resetToDefault() async {
-    // Appliquer la configuration par défaut
-    for (final entry in _defaultConfig.entries) {
-      await _ch.invokeMethod('setEffect', {'effect': entry.key, 'value': entry.value});
-    }
+    try {
+      AppLogger.log('🔄 Resetting to default config...');
+      // Appliquer la configuration par défaut
+      for (final entry in _defaultConfig.entries) {
+        await _ch.invokeMethod('setEffect', {'effect': entry.key, 'value': entry.value});
+      }
 
-    setState(() {
-      _fx.clear();
-      _fx.addAll(_defaultConfig);
-      _currentPresetName = null;
-    });
+      setState(() {
+        _fx.clear();
+        _fx.addAll(_defaultConfig);
+        _currentPresetName = null;
+      });
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Configuration par défaut restaurée'),
-          backgroundColor: Color(0xFF424242),
-        ),
-      );
+      AppLogger.log('✅ Default config restored');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Configuration par défaut restaurée'),
+            backgroundColor: Color(0xFF424242),
+          ),
+        );
+      }
+    } catch (e, stack) {
+      AppLogger.log('❌ CRASH resetToDefault: $e');
+      AppLogger.log(stack.toString());
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Erreur lors de la réinitialisation'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -1618,8 +1636,9 @@ class _MixingConsoleScreenState extends State<MixingConsoleScreen> {
     setState(() => _fx[key] = v);
     try {
       await _ch.invokeMethod('setEffect', {'effect': key, 'value': v});
-    } catch (e) {
-      debugPrint('setEffect error: $e');
+    } catch (e, stack) {
+      AppLogger.log('❌ setEffect($key, $v) error: $e');
+      AppLogger.log(stack.toString());
     }
   }
 
