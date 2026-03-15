@@ -270,6 +270,11 @@ class AudioState extends ChangeNotifier {
           notifyListeners();
         }
         break;
+      case 'log':
+        if (call.arguments is String) {
+          AppLogger.log(call.arguments as String);
+        }
+        break;
     }
   }
 
@@ -312,110 +317,110 @@ class AudioState extends ChangeNotifier {
   // try/catch pour éviter qu'une erreur sur un seul fichier ferme l'app.
 
   Future<void> addFiles() async {
-    importStatus = 'Sélecteur de fichiers ouvert…';
-    notifyListeners();
-
-    FilePickerResult? result;
     try {
-      result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['mp3', 'wav', 'flac', 'm4a', 'aac', 'ogg', 'opus'],
-        allowMultiple: true,
-      );
-      importStatus = 'Sélection : ${result?.files.length ?? 0} fichier(s)';
+      importStatus = 'Sélecteur de fichiers ouvert…';
       notifyListeners();
-    } catch (e) {
-      importStatus = 'Erreur FilePicker : $e';
-      notifyListeners();
-      return;
-    }
-    if (result == null) {
-      importStatus = 'Import annulé';
-      notifyListeners();
-      return;
-    }
 
-    final docsDir = await getApplicationDocumentsDirectory();
-    final mediaDir = Directory('${docsDir.path}/Media');
-    if (!await mediaDir.exists()) await mediaDir.create(recursive: true);
-
-    int addedCount = 0;
-    for (final f in result.files) {
-      final path = f.path;
-      final originalName = f.name;
-      print('📁 Fichier importé: $originalName, path: $path');
-      if (path == null) {
-        print('⚠️ Path null pour $originalName');
-        continue;
-      }
-
-      final sourceFile = File(path);
-      if (!await sourceFile.exists()) {
-        print('❌ Fichier introuvable: $path');
-        continue;
-      }
-
-      // Copie le fichier dans le répertoire Documents/Media de l'application.
-      // Cela permet de s'assurer qu'il est conservé et accessible même après
-      // que le fichier d'origine ait été supprimé ou désactivé par iOS.
-      String fileName = sourceFile.uri.pathSegments.last;
-      final extIndex = fileName.lastIndexOf('.');
-      final baseName = extIndex > 0 ? fileName.substring(0, extIndex) : fileName;
-      final ext = extIndex > 0 ? fileName.substring(extIndex) : '';
-
-      String destPath = '${mediaDir.path}/$fileName';
-      int counter = 1;
-      while (await File(destPath).exists()) {
-        destPath = '${mediaDir.path}/${baseName}_$counter$ext';
-        counter++;
-      }
-
+      FilePickerResult? result;
       try {
-        await sourceFile.copy(destPath);
-        print('✅ Copie réussie dans app: $destPath');
+        result = await FilePicker.platform.pickFiles(
+          type: FileType.custom,
+          allowedExtensions: ['mp3', 'wav', 'flac', 'm4a', 'aac', 'ogg', 'opus'],
+          allowMultiple: true,
+        );
+        importStatus = 'Sélection : ${result?.files.length ?? 0} fichier(s)';
+        notifyListeners();
       } catch (e) {
-        print('❌ Échec copie: $e');
-        continue;
+        AppLogger.log('❌ FilePicker error: $e');
+        importStatus = 'Erreur FilePicker : $e';
+        notifyListeners();
+        return;
+      }
+      if (result == null) {
+        importStatus = 'Import annulé';
+        notifyListeners();
+        return;
       }
 
-      final track = AudioTrack(
-        id: '${DateTime.now().microsecondsSinceEpoch}_$fileName',
-        path: destPath,
-        title: baseName,
-        duration: 0,
-      );
-      _library.addTrack(track);
-      _library.addToQueue(track);
-      print('✅ Track ajouté et mise en file : ${track.title}');
-      addedCount++;
-    }
+      final docsDir = await getApplicationDocumentsDirectory();
+      final mediaDir = Directory('${docsDir.path}/Media');
+      if (!await mediaDir.exists()) await mediaDir.create(recursive: true);
 
-    importStatus = 'Total ajouté : $addedCount piste(s)';
-    notifyListeners();
+      int addedCount = 0;
+      for (final f in result.files) {
+        try {
+          final path = f.path;
+          final originalName = f.name;
+          AppLogger.log('📁 Fichier: $originalName');
+          if (path == null) {
+            AppLogger.log('⚠️ Path null');
+            continue;
+          }
 
-    if (addedCount == 0) {
-      importStatus = 'Aucune piste importée (vérifiez les permissions)';
+          final sourceFile = File(path);
+          if (!await sourceFile.exists()) {
+            AppLogger.log('❌ Fichier introuvable');
+            continue;
+          }
+
+          String fileName = sourceFile.uri.pathSegments.last;
+          final extIndex = fileName.lastIndexOf('.');
+          final baseName = extIndex > 0 ? fileName.substring(0, extIndex) : fileName;
+          final ext = extIndex > 0 ? fileName.substring(extIndex) : '';
+
+          String destPath = '${mediaDir.path}/$fileName';
+          int counter = 1;
+          while (await File(destPath).exists()) {
+            destPath = '${mediaDir.path}/${baseName}_$counter$ext';
+            counter++;
+          }
+
+          await sourceFile.copy(destPath);
+          AppLogger.log('✅ Copié: $destPath');
+
+          final track = AudioTrack(
+            id: '${DateTime.now().microsecondsSinceEpoch}_$fileName',
+            path: destPath,
+            title: baseName,
+            duration: 0,
+          );
+          _library.addTrack(track);
+          _library.addToQueue(track);
+          addedCount++;
+        } catch (e) {
+          AppLogger.log('❌ Erreur fichier: $e');
+        }
+      }
+
+      importStatus = 'Total ajouté : $addedCount piste(s)';
       notifyListeners();
-      return;
-    }
 
-    try {
-      print('🔄 Sync playlist...');
-      await _syncPlaylist();
-      print('✅ Playlist synced');
-    } catch (e) {
-      print('❌ Erreur sync playlist: $e');
-      try {
-        await _loadCurrent();
-      } catch (e2) {
-        print('❌ Erreur load current: $e2');
-        isPlaying = false;
-        position = 0;
+      if (addedCount == 0) {
+        importStatus = 'Aucune piste importée';
+        notifyListeners();
+        return;
       }
-    }
 
-    print('🔔 notifyListeners');
-    notifyListeners();
+      try {
+        await _syncPlaylist();
+        AppLogger.log('✅ Sync OK');
+      } catch (e) {
+        AppLogger.log('❌ Sync error: $e');
+        try {
+          await _loadCurrent();
+        } catch (e2) {
+          AppLogger.log('❌ Load error: $e2');
+          isPlaying = false;
+          position = 0;
+        }
+      }
+      notifyListeners();
+    } catch (e, stack) {
+      AppLogger.log('❌ CRASH addFiles: $e');
+      AppLogger.log(stack.toString());
+      importStatus = 'ERREUR: $e';
+      notifyListeners();
+    }
   }
 
 
@@ -562,45 +567,54 @@ class AudioState extends ChangeNotifier {
   }
 
   Future<void> play() async {
-    if (queue.isEmpty) return;
-    if (current == null) {
-      try { await _loadCurrent(); } catch (e) { return; }
-    }
     try {
-      await _ch.invokeMethod('play');
-      isPlaying = true;
-      _startTimer();
-    } catch (e) {
-      debugPrint('play error: $e');
-      isPlaying = false;
+      if (queue.isEmpty) return;
+      if (current == null) {
+        try { await _loadCurrent(); } catch (e) { 
+          AppLogger.log('❌ loadCurrent: $e');
+          return; 
+        }
+      }
+      try {
+        await _ch.invokeMethod('play');
+        isPlaying = true;
+        _startTimer();
+      } catch (e) {
+        AppLogger.log('❌ play: $e');
+        isPlaying = false;
+      }
+      notifyListeners();
+    } catch (e, stack) {
+      AppLogger.log('❌ CRASH play: $e');
+      AppLogger.log(stack.toString());
     }
-    notifyListeners();
   }
 
   Future<void> pause() async {
     try {
       await _ch.invokeMethod('pause');
-    } catch (e) {
-      debugPrint('pause error: $e');
+      isPlaying = false;
+      _posTimer?.cancel();
+      notifyListeners();
+    } catch (e, stack) {
+      AppLogger.log('❌ CRASH pause: $e');
+      AppLogger.log(stack.toString());
     }
-    isPlaying = false;
-    _posTimer?.cancel();
-    notifyListeners();
   }
 
   Future<void> togglePlay() async => isPlaying ? pause() : play();
 
   Future<void> seek(double pos) async {
-    _isUserSeeking = true; // Prevent timer from overriding during seek
+    _isUserSeeking = true;
     try {
       final clampedPos = pos.clamp(0.0, duration);
       await _ch.invokeMethod('seek', {'position': clampedPos});
       position = clampedPos;
       notifyListeners();
-    } catch (e) {
-      debugPrint('seek error: $e');
+    } catch (e, stack) {
+      AppLogger.log('❌ CRASH seek: $e');
+      AppLogger.log(stack.toString());
     } finally {
-      // Reset the flag after a short delay to allow timer updates again
       Future.delayed(const Duration(milliseconds: 500), () {
         _isUserSeeking = false;
       });
@@ -610,16 +624,18 @@ class AudioState extends ChangeNotifier {
   Future<void> next() async {
     try {
       await _ch.invokeMethod('next');
-    } catch (e) {
-      debugPrint('next error: $e');
+    } catch (e, stack) {
+      AppLogger.log('❌ CRASH next: $e');
+      AppLogger.log(stack.toString());
     }
   }
 
   Future<void> previous() async {
     try {
       await _ch.invokeMethod('previous');
-    } catch (e) {
-      debugPrint('previous error: $e');
+    } catch (e, stack) {
+      AppLogger.log('❌ CRASH previous: $e');
+      AppLogger.log(stack.toString());
     }
   }
 
@@ -801,7 +817,7 @@ class _MainShellState extends State<MainShell> {
           Navigator.of(context).push(MaterialPageRoute(builder: (_) => const DebugLogScreen()));
         },
       ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+      floatingActionButtonLocation: FloatingActionButtonLocation.startFloat,
       bottomNavigationBar: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1870,6 +1886,25 @@ class DebugLogScreen extends StatelessWidget {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('Logs copiés dans le presse-papiers')),
               );
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.save),
+            tooltip: 'Sauvegarder dans un fichier',
+            onPressed: () async {
+              try {
+                final text = logs.join('\n');
+                final dir = await getApplicationDocumentsDirectory();
+                final file = File('${dir.path}/debug_logs_${DateTime.now().millisecondsSinceEpoch}.txt');
+                await file.writeAsString(text);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Logs sauvegardés: ${file.path}')),
+                );
+              } catch (e) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Erreur sauvegarde: $e')),
+                );
+              }
             },
           ),
           IconButton(
