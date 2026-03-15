@@ -1196,9 +1196,11 @@ class PlayerScreen extends StatelessWidget {
                             });
                           },
                           onChanged: (value) {
-                            // Update position immediately for visual feedback
+                            // Only update UI, don't seek on every change
                             _audio.position = value.clamp(0.0, _audio.duration);
-                            // Seek to the position (seek method handles notifyListeners)
+                          },
+                          onChangeEnd: (value) {
+                            // Seek only when user releases the slider
                             _audio.seek(value);
                           },
                         ),
@@ -1564,21 +1566,22 @@ class _MixingConsoleScreenState extends State<MixingConsoleScreen> {
       }
 
       AppLogger.log('📥 Loading preset: $name');
-      // Appliquer la configuration UNE PAR UNE avec délai
-      for (final entry in newFx.entries) {
-        try {
-          await _ch.invokeMethod('setEffect', {'effect': entry.key, 'value': entry.value});
-          await Future.delayed(const Duration(milliseconds: 50));
-        } catch (e) {
-          AppLogger.log('❌ Error setting ${entry.key}: $e');
-        }
-      }
-
+      // Update UI first
       setState(() {
         _fx.clear();
         _fx.addAll(newFx);
         _currentPresetName = name;
       });
+
+      // Apply to native with delays to prevent crashes
+      for (final entry in newFx.entries) {
+        try {
+          await _ch.invokeMethod('setEffect', {'effect': entry.key, 'value': entry.value});
+          await Future.delayed(const Duration(milliseconds: 100));
+        } catch (e) {
+          AppLogger.log('❌ Error setting ${entry.key}: $e');
+        }
+      }
 
       AppLogger.log('✅ Preset loaded successfully');
       if (mounted) {
@@ -1632,16 +1635,22 @@ class _MixingConsoleScreenState extends State<MixingConsoleScreen> {
   Future<void> _resetToDefault() async {
     try {
       AppLogger.log('🔄 Resetting to default config...');
-      // Appliquer la configuration par défaut
-      for (final entry in _defaultConfig.entries) {
-        await _ch.invokeMethod('setEffect', {'effect': entry.key, 'value': entry.value});
-      }
-
+      // Update UI first
       setState(() {
         _fx.clear();
         _fx.addAll(_defaultConfig);
         _currentPresetName = null;
       });
+
+      // Apply to native with delays
+      for (final entry in _defaultConfig.entries) {
+        try {
+          await _ch.invokeMethod('setEffect', {'effect': entry.key, 'value': entry.value});
+          await Future.delayed(const Duration(milliseconds: 100));
+        } catch (e) {
+          AppLogger.log('❌ Error setting ${entry.key}: $e');
+        }
+      }
 
       AppLogger.log('✅ Default config restored');
       if (mounted) {
