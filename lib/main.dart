@@ -971,8 +971,10 @@ class AudioState extends ChangeNotifier {
 
   @override
   void dispose() {
-    _posTimer?.cancel();
-    _spectrumTimer?.cancel();
+    _posTimer?.invalidate();
+    _posTimer = null;
+    _spectrumTimer?.invalidate();
+    _spectrumTimer = null;
     super.dispose();
   }
 }
