@@ -86,48 +86,48 @@ workflows:
           ls -lh build/ios/ipa/
           
           # Create installation instructions
-          cat > build/ios/ipa/INSTALL.txt << 'EOF'
-CINEMA AUDIO LUXE - Installation Instructions
-===============================================
-
-This is an UNSIGNED IPA. You need to sign it before installing on your iPhone XR.
-
-METHOD 1: Using AltStore (NO Mac needed)
------------------------------------------
-1. Download AltStore from https://altstore.io
-2. Install AltStore on your PC
-3. Connect iPhone XR via USB
-4. Open AltStore on PC, install AltServer
-5. Drag CinemaAudioLuxe-unsigned.ipa into AltStore
-6. App will be signed with your Apple ID and installed
-
-METHOD 2: Using Sideloadly (NO Mac needed)
--------------------------------------------
-1. Download Sideloadly from https://sideloadly.io
-2. Connect iPhone XR via USB
-3. Open Sideloadly
-4. Drag CinemaAudioLuxe-unsigned.ipa
-5. Enter your Apple ID
-6. Click Start
-
-METHOD 3: Using Xcode (Mac required)
--------------------------------------
-1. Open Xcode
-2. Window > Devices and Simulators
-3. Select your iPhone XR
-4. Click "+" under Installed Apps
-5. Select the .app bundle (in Payload folder)
-6. Xcode will sign and install
-
-METHOD 4: Using ios-deploy (Mac/Linux)
----------------------------------------
-1. Install: brew install ios-deploy
-2. Unzip the IPA: unzip CinemaAudioLuxe-unsigned.ipa
-3. Install: ios-deploy --bundle Payload/*.app
-
-NOTE: Free Apple ID = 7 days validity, need to re-sign weekly
-      Paid Developer Account = 1 year validity
-EOF
+          cat > build/ios/ipa/INSTALL.txt << 'ENDOFFILE'
+          CINEMA AUDIO LUXE - Installation Instructions
+          ===============================================
+          
+          This is an UNSIGNED IPA. You need to sign it before installing on your iPhone XR.
+          
+          METHOD 1 - Using AltStore (NO Mac needed)
+          -----------------------------------------
+          1. Download AltStore from https://altstore.io
+          2. Install AltStore on your PC
+          3. Connect iPhone XR via USB
+          4. Open AltStore on PC, install AltServer
+          5. Drag CinemaAudioLuxe-unsigned.ipa into AltStore
+          6. App will be signed with your Apple ID and installed
+          
+          METHOD 2 - Using Sideloadly (NO Mac needed)
+          -------------------------------------------
+          1. Download Sideloadly from https://sideloadly.io
+          2. Connect iPhone XR via USB
+          3. Open Sideloadly
+          4. Drag CinemaAudioLuxe-unsigned.ipa
+          5. Enter your Apple ID
+          6. Click Start
+          
+          METHOD 3 - Using Xcode (Mac required)
+          -------------------------------------
+          1. Open Xcode
+          2. Window > Devices and Simulators
+          3. Select your iPhone XR
+          4. Click + under Installed Apps
+          5. Select the .app bundle (in Payload folder)
+          6. Xcode will sign and install
+          
+          METHOD 4 - Using ios-deploy (Mac/Linux)
+          ---------------------------------------
+          1. Install: brew install ios-deploy
+          2. Unzip the IPA: unzip CinemaAudioLuxe-unsigned.ipa
+          3. Install: ios-deploy --bundle Payload/*.app
+          
+          NOTE: Free Apple ID = 7 days validity, need to re-sign weekly
+                Paid Developer Account = 1 year validity
+          ENDOFFILE
           
           echo "Installation instructions created"
     
