@@ -172,6 +172,15 @@ class AudioLibrary {
     }
   }
 
+  Future<void> clearAll() async {
+    _tracks.clear();
+    _playlists.clear();
+    _queue.clear();
+    _currentIndex = 0;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.clear();
+  }
+
   List<AudioTrack> getPlaylistTracks(String playlistId) {
     final playlist = _playlists.firstWhere((p) => p.id == playlistId, orElse: () => throw Exception('Playlist not found'));
     return playlist.trackIds

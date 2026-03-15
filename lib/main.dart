@@ -82,7 +82,13 @@ class AudioState extends ChangeNotifier {
   }
 
   Future<void> _initializeState() async {
-    await _library.loadLibrary();
+    try {
+      await _library.loadLibrary();
+    } catch (e) {
+      AppLogger.log('❌ Library load error: $e - Resetting library');
+      // Si la bibliothèque est corrompue, la réinitialiser
+      await _library.clearAll();
+    }
     await _loadAudioSettings();
     _startSpectrumTimer();
     await refreshOutputDevices();
@@ -607,7 +613,16 @@ class AudioState extends ChangeNotifier {
   Future<void> seek(double pos) async {
     _isUserSeeking = true;
     try {
-      final clampedPos = pos.clamp(0.0, duration);
+      // Vérifier que la durée est valide avant de seek
+      if (duration <= 0) {
+        AppLogger.log('⚠️ Cannot seek: duration is 0');
+        _isUserSeeking = false;
+        return;
+      }
+      // Limiter strictement la position à 95% de la durée pour éviter les crashes
+      final maxPos = duration * 0.95;
+      final clampedPos = pos.clamp(0.0, maxPos);
+      AppLogger.log('🎯 Seeking to $clampedPos (max: $maxPos)');
       await _ch.invokeMethod('seek', {'position': clampedPos});
       position = clampedPos;
       notifyListeners();
