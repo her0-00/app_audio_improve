@@ -4,12 +4,10 @@ workflows:
     max_build_duration: 90
     environment:
       flutter: stable
-      xcode: latest
+      xcode: 15.0
       cocoapods: default
-    # Alternatives si latest ne fonctionne pas :
-    # xcode: 15.2
-    # xcode: 15.3
-    # xcode: 15.4
+      vars:
+        BUNDLE_ID: "com.cinemaaudioluxe.app"
     
     scripts:
       - name: Environment info
@@ -18,12 +16,8 @@ workflows:
           flutter --version
           xcodebuild -version
           pod --version
-          echo "Available Xcode versions:"
-          ls /Applications/ | grep Xcode || echo "Xcode not found in /Applications/"
           echo "Flutter doctor:"
           flutter doctor -v
-          echo "iOS specific check:"
-          flutter doctor --ios || echo "iOS check failed"
           echo "=================="
       
       - name: Get Flutter packages
@@ -34,93 +28,117 @@ workflows:
         script: |
           flutter clean
           cd ios
-          rm -rf Pods Podfile.lock .symlinks/ Flutter/Flutter.framework
+          rm -rf Pods Podfile.lock .symlinks/ Flutter/Flutter.framework Flutter/Flutter.podspec
           cd ..
       
       - name: Install CocoaPods dependencies
         script: |
           cd ios
-          pod install --repo-update
+          pod install --repo-update --verbose
           cd ..
       
-      - name: Flutter analyze
+      - name: Disable code signing
         script: |
-          flutter analyze --no-fatal-infos || echo "Analysis warnings found (non-blocking)"
+          cd ios
+          # Modify project.pbxproj to disable code signing
+          sed -i '' 's/CODE_SIGN_IDENTITY = "iPhone Developer"/CODE_SIGN_IDENTITY = ""/g' Runner.xcodeproj/project.pbxproj
+          sed -i '' 's/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g' Runner.xcodeproj/project.pbxproj
+          sed -i '' 's/DEVELOPMENT_TEAM = .*/DEVELOPMENT_TEAM = ""/g' Runner.xcodeproj/project.pbxproj
+          cd ..
       
       - name: Build iOS app (no signing)
         script: |
           set -e
-          echo "Starting iOS build..."
-          echo "Checking Flutter iOS compatibility..."
-          flutter doctor --ios || echo "iOS doctor check completed"
-          echo "Building iOS app..."
-          flutter build ios --release --no-codesign --no-tree-shake-icons
-          echo "Build completed successfully"
+          echo "Building iOS app without code signing..."
+          flutter build ios --release --no-codesign --no-tree-shake-icons --verbose
+          echo "Build completed"
           ls -la build/ios/iphoneos/
       
-      - name: Package .ipa manually
+      - name: Create unsigned IPA
         script: |
           set -e
-          echo "Creating IPA package..."
-          mkdir -p Payload
+          echo "Creating unsigned IPA..."
           
-          # Trouver le fichier .app
+          # Find the .app bundle
           APP_PATH=$(find build/ios/iphoneos -name "*.app" -type d | head -n 1)
           
           if [ -z "$APP_PATH" ]; then
             echo "ERROR: No .app bundle found"
-            ls -la build/ios/iphoneos/
+            find build/ios -name "*.app" -type d
             exit 1
           fi
           
-          echo "Found app bundle: $APP_PATH"
+          echo "Found app: $APP_PATH"
+          
+          # Create Payload directory
+          rm -rf Payload
+          mkdir -p Payload
           cp -r "$APP_PATH" Payload/
           
-          # Créer l'IPA
-          zip -r CinemaAudioLuxe.ipa Payload
+          # Create IPA
+          zip -r CinemaAudioLuxe-unsigned.ipa Payload
           
-          # Déplacer dans le dossier artifacts
+          # Move to artifacts
           mkdir -p build/ios/ipa
-          mv CinemaAudioLuxe.ipa build/ios/ipa/
+          mv CinemaAudioLuxe-unsigned.ipa build/ios/ipa/
           
-          echo "IPA created successfully"
+          echo "Unsigned IPA created successfully"
           ls -lh build/ios/ipa/
+          
+          # Create installation instructions
+          cat > build/ios/ipa/INSTALL.txt << 'EOF'
+CINEMA AUDIO LUXE - Installation Instructions
+===============================================
+
+This is an UNSIGNED IPA. You need to sign it before installing on your iPhone XR.
+
+METHOD 1: Using AltStore (NO Mac needed)
+-----------------------------------------
+1. Download AltStore from https://altstore.io
+2. Install AltStore on your PC
+3. Connect iPhone XR via USB
+4. Open AltStore on PC, install AltServer
+5. Drag CinemaAudioLuxe-unsigned.ipa into AltStore
+6. App will be signed with your Apple ID and installed
+
+METHOD 2: Using Sideloadly (NO Mac needed)
+-------------------------------------------
+1. Download Sideloadly from https://sideloadly.io
+2. Connect iPhone XR via USB
+3. Open Sideloadly
+4. Drag CinemaAudioLuxe-unsigned.ipa
+5. Enter your Apple ID
+6. Click Start
+
+METHOD 3: Using Xcode (Mac required)
+-------------------------------------
+1. Open Xcode
+2. Window > Devices and Simulators
+3. Select your iPhone XR
+4. Click "+" under Installed Apps
+5. Select the .app bundle (in Payload folder)
+6. Xcode will sign and install
+
+METHOD 4: Using ios-deploy (Mac/Linux)
+---------------------------------------
+1. Install: brew install ios-deploy
+2. Unzip the IPA: unzip CinemaAudioLuxe-unsigned.ipa
+3. Install: ios-deploy --bundle Payload/*.app
+
+NOTE: Free Apple ID = 7 days validity, need to re-sign weekly
+      Paid Developer Account = 1 year validity
+EOF
+          
+          echo "Installation instructions created"
     
     artifacts:
       - build/ios/ipa/*.ipa
-      - build/ios/iphoneos/*.app
+      - build/ios/ipa/INSTALL.txt
     
     publishing:
       email:
         recipients:
           - yenamdossou@outlook.fr
-
-  ios-simulator:
-    name: Cinema Audio Luxe iOS Simulator Build
-    max_build_duration: 60
-    environment:
-      flutter: stable
-      xcode: latest
-      cocoapods: default
-    
-    scripts:
-      - name: Get Flutter packages
-        script: |
-          flutter pub get
-      
-      - name: Install CocoaPods dependencies
-        script: |
-          cd ios
-          pod install --repo-update
-          cd ..
-      
-      - name: Build iOS simulator app
-        script: |
-          set -e
-          echo "Building for iOS Simulator..."
-          flutter build ios --simulator --no-codesign
-          echo "Simulator build completed"
-          ls -la build/ios/iphonesimulator/
-    
-    artifacts:
-      - build/ios/iphonesimulator/*.app
+        notify:
+          success: true
+          failure: true
