@@ -444,50 +444,32 @@ class AudioState extends ChangeNotifier {
 
 
   Future<void> playIndex(int index) async {
-    // Vérifier si la piste demandée existe
-    if (index < 0 || index >= queue.length) {
-      print('❌ Invalid index: $index');
-      return;
-    }
-
-    final track = queue[index];
-    final file = File(track.path);
-    final exists = await file.exists();
-
-    if (!exists) {
-      print('❌ Track file missing: ${track.title}');
-      // Trouver la prochaine piste valide
-      for (int i = index + 1; i < queue.length; i++) {
-        final nextTrack = queue[i];
-        final nextFile = File(nextTrack.path);
-        if (await nextFile.exists()) {
-          print('✅ Found next valid track at index $i: ${nextTrack.title}');
-          _library.jumpTo(i);
-          await _playValidTrack();
-          return;
-        }
+    try {
+      if (index < 0 || index >= queue.length) {
+        AppLogger.log('❌ Invalid index: $index');
+        return;
       }
-      // Si aucune piste valide trouvée après, chercher avant
-      for (int i = index - 1; i >= 0; i--) {
-        final prevTrack = queue[i];
-        final prevFile = File(prevTrack.path);
-        if (await prevFile.exists()) {
-          print('✅ Found previous valid track at index $i: ${prevTrack.title}');
-          _library.jumpTo(i);
-          await _playValidTrack();
-          return;
-        }
-      }
-      // Aucune piste valide trouvée
-      print('❌ No valid tracks found');
-      importStatus = 'Aucune piste jouable trouvée - Réimportez des fichiers';
-      notifyListeners();
-      return;
-    }
 
-    // La piste existe, la jouer
-    _library.jumpTo(index);
-    await _playValidTrack();
+      final track = queue[index];
+      final file = File(track.path);
+      final exists = await file.exists();
+
+      if (!exists) {
+        AppLogger.log('❌ Track file missing: ${track.title}');
+        return;
+      }
+
+      // FORCER la resync de TOUTE la playlist avant de jouer
+      AppLogger.log('🔄 Force syncing playlist before playing index $index');
+      await _syncPlaylist();
+      
+      // Maintenant jouer l'index demandé
+      _library.jumpTo(index);
+      await _playValidTrack();
+    } catch (e, stack) {
+      AppLogger.log('❌ CRASH playIndex: $e');
+      AppLogger.log(stack.toString());
+    }
   }
 
   Future<void> _playValidTrack() async {
@@ -1563,7 +1545,10 @@ class _MixingConsoleScreenState extends State<MixingConsoleScreen> {
     try {
       final prefs = await SharedPreferences.getInstance();
       final presetData = prefs.getString('preset_$name');
-      if (presetData == null) return;
+      if (presetData == null) {
+        AppLogger.log('⚠️ Preset not found: $name');
+        return;
+      }
 
       final newFx = Map<String, double>.from(_fx);
       final entries = presetData.split(',');
@@ -1578,9 +1563,15 @@ class _MixingConsoleScreenState extends State<MixingConsoleScreen> {
         }
       }
 
-      // Appliquer la configuration
+      AppLogger.log('📥 Loading preset: $name');
+      // Appliquer la configuration UNE PAR UNE avec délai
       for (final entry in newFx.entries) {
-        await _ch.invokeMethod('setEffect', {'effect': entry.key, 'value': entry.value});
+        try {
+          await _ch.invokeMethod('setEffect', {'effect': entry.key, 'value': entry.value});
+          await Future.delayed(const Duration(milliseconds: 50));
+        } catch (e) {
+          AppLogger.log('❌ Error setting ${entry.key}: $e');
+        }
       }
 
       setState(() {
@@ -1589,6 +1580,7 @@ class _MixingConsoleScreenState extends State<MixingConsoleScreen> {
         _currentPresetName = name;
       });
 
+      AppLogger.log('✅ Preset loaded successfully');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -1597,8 +1589,9 @@ class _MixingConsoleScreenState extends State<MixingConsoleScreen> {
           ),
         );
       }
-    } catch (e) {
-      debugPrint('Error loading preset: $e');
+    } catch (e, stack) {
+      AppLogger.log('❌ CRASH _loadPreset: $e');
+      AppLogger.log(stack.toString());
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(

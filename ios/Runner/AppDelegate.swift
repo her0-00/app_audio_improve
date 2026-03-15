@@ -540,23 +540,29 @@ import Accelerate
         channel?.invokeMethod("log", arguments: "⚠️ Seek: not ready")
         return
       }
-      let framePos  = AVAudioFramePosition(position * file.processingFormat.sampleRate)
+      
+      // Limiter strictement la position pour éviter le callback onTrackFinished
+      let maxPosition = getDuration() * 0.98  // 98% max pour éviter la fin
+      let safePosition = min(position, maxPosition)
+      
+      let framePos  = AVAudioFramePosition(safePosition * file.processingFormat.sampleRate)
       let remaining = file.length - framePos
-      guard remaining > 0 else {
-        channel?.invokeMethod("log", arguments: "⚠️ Seek: out of bounds")
+      guard remaining > 100 else {  // Au moins 100 frames restantes
+        channel?.invokeMethod("log", arguments: "⚠️ Seek: too close to end")
         return
       }
       seekFrameOffset = framePos
-      lastSeekTime = position
+      lastSeekTime = safePosition
       let wasPlaying = isPlaying
       player.stop()
+      
+      // NE PAS utiliser le callback completion pour éviter onTrackFinished pendant seek
       player.scheduleSegment(file, startingFrame: framePos,
-        frameCount: AVAudioFrameCount(remaining), at: nil) { [weak self] in
-        DispatchQueue.main.async { self?.onTrackFinished() }
-      }
+        frameCount: AVAudioFrameCount(remaining), at: nil, completionHandler: nil)
+      
       if wasPlaying { player.play() }
       updateNowPlaying()
-      channel?.invokeMethod("log", arguments: "✅ Seeked to \(position)")
+      channel?.invokeMethod("log", arguments: "✅ Seeked to \(safePosition)")
     } catch {
       channel?.invokeMethod("log", arguments: "❌ CRASH seek: \(error)")
     }
