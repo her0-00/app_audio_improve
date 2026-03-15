@@ -33,6 +33,17 @@ import Accelerate
   private var currentEQProfile = "default"
   private var currentPreset = "cinema"
   private var positionTimer: Timer?
+  
+  // INNOVATION: Real-time spectrum analysis
+  private var spectrumTimer: Timer?
+  private var fftSetup: FFTSetup?
+  private let fftSize = 512
+  private var fftBuffer: [Float] = []
+  
+  // INNOVATION: Crossfade support
+  private var player2: AVAudioPlayerNode?
+  private var crossfadeEnabled = false
+  private var crossfadeDuration: Double = 2.0
 
   override func application(
     _ application: UIApplication,
@@ -115,6 +126,16 @@ import Accelerate
         result(self.currentIndex)
       case "isPlaying":
         result(self.isPlaying)
+      case "getSpectrum":
+        result(self.getSpectrum())
+      case "setCrossfade":
+        if let args = call.arguments as? [String: Any], let enabled = args["enabled"] as? Bool {
+          self.crossfadeEnabled = enabled
+          if let duration = args["duration"] as? Double {
+            self.crossfadeDuration = duration
+          }
+          result(nil)
+        }
       case "openURL":
         if let args = call.arguments as? [String: Any],
            let urlString = args["url"] as? String,
@@ -151,12 +172,18 @@ import Accelerate
 
     audioEngine = AVAudioEngine()
     player      = AVAudioPlayerNode()
+    player2     = AVAudioPlayerNode()  // For crossfade
     eq          = AVAudioUnitEQ(numberOfBands: 10)
     reverb      = AVAudioUnitReverb()
     delay       = AVAudioUnitDelay()
     distortion  = AVAudioUnitDistortion()
     timePitch   = AVAudioUnitTimePitch()
     mixerNode   = AVAudioMixerNode()
+    
+    // Setup FFT for spectrum analysis
+    let log2n = vDSP_Length(log2(Float(fftSize)))
+    fftSetup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2))
+    fftBuffer = Array(repeating: 0, count: fftSize)
 
     let compDesc = AudioComponentDescription(
       componentType: kAudioUnitType_Effect,
@@ -167,12 +194,12 @@ import Accelerate
     compressor = AVAudioUnitEffect(audioComponentDescription: compDesc)
 
     guard
-      let engine = audioEngine, let player = player, let eq = eq,
-      let reverb = reverb, let delay = delay, let distortion = distortion,
+      let engine = audioEngine, let player = player, let player2 = player2,
+      let eq = eq, let reverb = reverb, let delay = delay, let distortion = distortion,
       let timePitch = timePitch, let comp = compressor, let mixer = mixerNode
     else { return }
 
-    engine.attach(player); engine.attach(eq); engine.attach(reverb)
+    engine.attach(player); engine.attach(player2); engine.attach(eq); engine.attach(reverb)
     engine.attach(delay);  engine.attach(distortion); engine.attach(timePitch)
     engine.attach(comp);   engine.attach(mixer)
 
@@ -183,7 +210,10 @@ import Accelerate
     distortion.loadFactoryPreset(.drumsBitBrush); distortion.wetDryMix = 3
 
     let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2)!
-    engine.connect(player,     to: eq,         format: format)
+    // Connect both players to mixer for crossfade
+    engine.connect(player,     to: mixer,      format: format)
+    engine.connect(player2,    to: mixer,      format: format)
+    engine.connect(mixer,      to: eq,         format: format)
     engine.connect(eq,         to: distortion, format: format)
     engine.connect(distortion, to: comp,       format: format)
     engine.connect(comp,       to: delay,      format: format)
@@ -206,6 +236,7 @@ import Accelerate
     setupRemoteControls()
     applyPreset(currentPreset)
     autoApplyEQForDevice()
+    startSpectrumAnalysis()
   }
 
   // MARK: - EQ Profiles
@@ -949,6 +980,148 @@ import Accelerate
       audioEngine = nil; setupAudioEngine()
       let savedPos = getPosition(); let wasPlaying = isPlaying
       seek(to: savedPos); if wasPlaying { play() }
+    }
+  }
+  
+  // MARK: - Real-time Spectrum Analysis
+  
+  private func startSpectrumAnalysis() {
+    spectrumTimer?.invalidate()
+    spectrumTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+      guard let self = self, self.isPlaying else { return }
+      let spectrum = self.getSpectrum()
+      DispatchQueue.main.async {
+        self.channel?.invokeMethod("onSpectrumData", arguments: spectrum)
+      }
+    }
+  }
+  
+  private func getSpectrum() -> [Float] {
+    guard let player = player, let audioFile = audioFile else {
+      return Array(repeating: 0.0, count: 32)
+    }
+    
+    // Install tap on player node to get audio buffer
+    let format = audioFile.processingFormat
+    var spectrumData: [Float] = Array(repeating: 0.0, count: 32)
+    
+    // Try to get audio buffer from player
+    player.installTap(onBus: 0, bufferSize: AVAudioFrameCount(fftSize), format: format) { [weak self] buffer, _ in
+      guard let self = self else { return }
+      
+      let channelData = buffer.floatChannelData?[0]
+      guard let data = channelData else { return }
+      
+      // Perform FFT
+      var realParts = [Float](repeating: 0, count: self.fftSize / 2)
+      var imagParts = [Float](repeating: 0, count: self.fftSize / 2)
+      
+      // Copy audio data
+      for i in 0..<self.fftSize {
+        self.fftBuffer[i] = data[i]
+      }
+      
+      // Apply Hann window
+      var window = [Float](repeating: 0, count: self.fftSize)
+      vDSP_hann_window(&window, vDSP_Length(self.fftSize), Int32(vDSP_HANN_NORM))
+      vDSP_vmul(self.fftBuffer, 1, window, 1, &self.fftBuffer, 1, vDSP_Length(self.fftSize))
+      
+      // Perform FFT
+      self.fftBuffer.withUnsafeMutableBufferPointer { bufferPtr in
+        var splitComplex = DSPSplitComplex(
+          realp: &realParts,
+          imagp: &imagParts
+        )
+        
+        bufferPtr.baseAddress?.withMemoryRebound(to: DSPComplex.self, capacity: self.fftSize / 2) { complexPtr in
+          vDSP_ctoz(complexPtr, 2, &splitComplex, 1, vDSP_Length(self.fftSize / 2))
+        }
+        
+        if let setup = self.fftSetup {
+          vDSP_fft_zrip(setup, &splitComplex, 1, vDSP_Length(log2(Float(self.fftSize))), FFTDirection(FFT_FORWARD))
+        }
+        
+        // Calculate magnitudes
+        var magnitudes = [Float](repeating: 0, count: self.fftSize / 2)
+        vDSP_zvmags(&splitComplex, 1, &magnitudes, 1, vDSP_Length(self.fftSize / 2))
+        
+        // Group into 32 bands
+        let bandsPerGroup = magnitudes.count / 32
+        for i in 0..<32 {
+          let start = i * bandsPerGroup
+          let end = min(start + bandsPerGroup, magnitudes.count)
+          var sum: Float = 0
+          vDSP_sve(Array(magnitudes[start..<end]), 1, &sum, vDSP_Length(end - start))
+          spectrumData[i] = sqrt(sum / Float(bandsPerGroup)) / 100.0
+        }
+      }
+      
+      // Remove tap to avoid memory leak
+      player.removeTap(onBus: 0)
+    }
+    
+    return spectrumData
+  }
+  
+  // MARK: - Crossfade Playback
+  
+  private func playCrossfade(nextPath: String) {
+    guard crossfadeEnabled, let player2 = player2 else {
+      // Fallback to normal playback
+      loadAudio(path: nextPath)
+      play()
+      return
+    }
+    
+    do {
+      // Load next track in player2
+      let nextFile = try AVAudioFile(forReading: URL(fileURLWithPath: nextPath))
+      
+      // Start fading out player1
+      let fadeSteps = 20
+      let fadeInterval = crossfadeDuration / Double(fadeSteps)
+      var step = 0
+      
+      // Schedule player2 to start
+      player2.scheduleFile(nextFile, at: nil, completionHandler: nil)
+      player2.volume = 0.0
+      player2.play()
+      
+      // Crossfade timer
+      Timer.scheduledTimer(withTimeInterval: fadeInterval, repeats: true) { [weak self] timer in
+        guard let self = self else {
+          timer.invalidate()
+          return
+        }
+        
+        step += 1
+        let progress = Float(step) / Float(fadeSteps)
+        
+        self.player?.volume = 1.0 - progress
+        self.player2?.volume = progress
+        
+        if step >= fadeSteps {
+          timer.invalidate()
+          // Swap players
+          self.player?.stop()
+          let temp = self.player
+          self.player = self.player2
+          self.player2 = temp
+          self.player?.volume = 1.0
+          
+          // Update audio file reference
+          self.audioFile = nextFile
+          self.seekFrameOffset = 0
+          self.lastSeekTime = 0
+        }
+      }
+      
+      channel?.invokeMethod("log", arguments: "✅ Crossfade started")
+    } catch {
+      channel?.invokeMethod("log", arguments: "❌ Crossfade error: \(error)")
+      // Fallback
+      loadAudio(path: nextPath)
+      play()
     }
   }
 }
