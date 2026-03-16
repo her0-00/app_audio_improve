@@ -582,70 +582,62 @@ import Accelerate
   }
 
   func loadPlaylist(paths: [String], index: Int) {
-    do {
-      channel?.invokeMethod("log", arguments: "loadPlaylist: \(paths.count) tracks, index: \(index)")
-      guard !paths.isEmpty, index >= 0, index < paths.count else {
-        channel?.invokeMethod("log", arguments: "⚠️ Invalid playlist parameters")
-        playlist = []
-        currentIndex = 0
-        return
-      }
-
-      playlist = paths
-      currentIndex = index
-      loadAudio(path: paths[index])
-
-      if shuffleEnabled && !paths.isEmpty {
-        buildShuffleOrder()
-      }
-      
-      // Preload next track
-      preloadNextTrack()
-      
-      channel?.invokeMethod("log", arguments: "✅ Playlist loaded with \(paths.count) tracks")
-    } catch {
-      channel?.invokeMethod("log", arguments: "❌ loadPlaylist error: \(error)")
+    channel?.invokeMethod("log", arguments: "loadPlaylist: \(paths.count) tracks, index: \(index)")
+    guard !paths.isEmpty, index >= 0, index < paths.count else {
+      channel?.invokeMethod("log", arguments: "⚠️ Invalid playlist parameters")
+      playlist = []
+      currentIndex = 0
+      return
     }
+
+    playlist = paths
+    currentIndex = index
+    loadAudio(path: paths[index])
+
+    if shuffleEnabled && !paths.isEmpty {
+      buildShuffleOrder()
+    }
+    
+    // Preload next track
+    preloadNextTrack()
+    
+    channel?.invokeMethod("log", arguments: "✅ Playlist loaded with \(paths.count) tracks")
   }
 
   func play() {
-    do {
-      guard let file = audioFile else {
-        channel?.invokeMethod("log", arguments: "⚠️ No audio loaded")
-        return
-      }
-      if audioEngine == nil || !isEngineRunning { setupAudioEngine() }
-      guard let player = player, isEngineRunning else {
-        channel?.invokeMethod("log", arguments: "⚠️ Engine not ready")
-        return
-      }
-      player.stop()
-      let startFrame = seekFrameOffset
-      let remaining  = file.length - startFrame
-      guard remaining > 0 else {
-        channel?.invokeMethod("log", arguments: "⚠️ Nothing to play")
-        return
-      }
-      
-      player.scheduleSegment(file, startingFrame: startFrame,
-        frameCount: AVAudioFrameCount(remaining), at: nil, completionHandler: nil)
-      player.play()
-      isPlaying = true
-      startPositionMonitoring()
-      updateNowPlaying()
-      
-      // Preload next track in background
-      preloadNextTrack()
-      
-      // Notify Flutter
-      DispatchQueue.main.async { [weak self] in
-        self?.channel?.invokeMethod("onPlaybackStateChanged", arguments: ["isPlaying": true])
-      }
-      
-      channel?.invokeMethod("log", arguments: "✅ Playing")
-    } catch {
-      channel?.invokeMethod("log", arguments: "❌ CRASH play: \(error)")
+    guard let file = audioFile else {
+      channel?.invokeMethod("log", arguments: "⚠️ No audio loaded")
+      return
     }
+    if audioEngine == nil || !isEngineRunning { setupAudioEngine() }
+    guard let player = player, isEngineRunning else {
+      channel?.invokeMethod("log", arguments: "⚠️ Engine not ready")
+      return
+    }
+    player.stop()
+    let startFrame = seekFrameOffset
+    let remaining  = file.length - startFrame
+    guard remaining > 0 else {
+      channel?.invokeMethod("log", arguments: "⚠️ Nothing to play")
+      return
+    }
+    
+    player.scheduleSegment(file, startingFrame: startFrame,
+      frameCount: AVAudioFrameCount(remaining), at: nil, completionHandler: nil)
+    player.play()
+    isPlaying = true
+    startPositionMonitoring()
+    updateNowPlaying()
+    
+    // Preload next track in background
+    preloadNextTrack()
+    
+    // Notify Flutter
+    DispatchQueue.main.async { [weak self] in
+      self?.channel?.invokeMethod("onPlaybackStateChanged", arguments: ["isPlaying": true])
+    }
+    
+    channel?.invokeMethod("log", arguments: "✅ Playing")
   }
   
   private func startPositionMonitoring() {
@@ -670,76 +662,68 @@ import Accelerate
   }
 
   func pause() {
-    do {
-      guard isPlaying else {
-        channel?.invokeMethod("log", arguments: "⚠️ Not playing")
-        return
-      }
-
-      positionTimer?.invalidate()
-      lastSeekTime    = getPosition()
-      seekFrameOffset = AVAudioFramePosition(lastSeekTime * (audioFile?.processingFormat.sampleRate ?? 44100))
-      
-      if let player = player {
-        player.pause()
-      } else {
-        channel?.invokeMethod("log", arguments: "⚠️ Player nil")
-      }
-
-      isPlaying = false
-      updateNowPlaying()
-      
-      // Notify Flutter
-      DispatchQueue.main.async { [weak self] in
-        self?.channel?.invokeMethod("onPlaybackStateChanged", arguments: ["isPlaying": false])
-      }
-      
-      channel?.invokeMethod("log", arguments: "✅ Paused")
-    } catch {
-      channel?.invokeMethod("log", arguments: "❌ CRASH pause: \(error)")
+    guard isPlaying else {
+      channel?.invokeMethod("log", arguments: "⚠️ Not playing")
+      return
     }
+
+    positionTimer?.invalidate()
+    lastSeekTime    = getPosition()
+    seekFrameOffset = AVAudioFramePosition(lastSeekTime * (audioFile?.processingFormat.sampleRate ?? 44100))
+    
+    if let player = player {
+      player.pause()
+    } else {
+      channel?.invokeMethod("log", arguments: "⚠️ Player nil")
+    }
+
+    isPlaying = false
+    updateNowPlaying()
+    
+    // Notify Flutter
+    DispatchQueue.main.async { [weak self] in
+      self?.channel?.invokeMethod("onPlaybackStateChanged", arguments: ["isPlaying": false])
+    }
+    
+    channel?.invokeMethod("log", arguments: "✅ Paused")
   }
 
   func seek(to position: Double) {
-    do {
-      guard let file = audioFile, isEngineRunning, let player = player else {
-        channel?.invokeMethod("log", arguments: "⚠️ Seek: not ready")
-        return
-      }
-      
-      let duration = getDuration()
-      guard duration > 0 else {
-        channel?.invokeMethod("log", arguments: "⚠️ Seek: invalid duration")
-        return
-      }
-      
-      // Clamp position to valid range
-      let safePosition = max(0.0, min(position, duration - 0.1))
-      
-      let framePos  = AVAudioFramePosition(safePosition * file.processingFormat.sampleRate)
-      let remaining = file.length - framePos
-      guard remaining > 100 else {
-        channel?.invokeMethod("log", arguments: "⚠️ Seek: too close to end")
-        return
-      }
-      
-      seekFrameOffset = framePos
-      lastSeekTime = safePosition
-      let wasPlaying = isPlaying
-      
-      player.stop()
-      player.scheduleSegment(file, startingFrame: framePos,
-        frameCount: AVAudioFrameCount(remaining), at: nil, completionHandler: nil)
-      
-      if wasPlaying { 
-        player.play() 
-      }
-      
-      updateNowPlaying()
-      channel?.invokeMethod("log", arguments: "✅ Seeked to \(safePosition)")
-    } catch {
-      channel?.invokeMethod("log", arguments: "❌ CRASH seek: \(error)")
+    guard let file = audioFile, isEngineRunning, let player = player else {
+      channel?.invokeMethod("log", arguments: "⚠️ Seek: not ready")
+      return
     }
+    
+    let duration = getDuration()
+    guard duration > 0 else {
+      channel?.invokeMethod("log", arguments: "⚠️ Seek: invalid duration")
+      return
+    }
+    
+    // Clamp position to valid range
+    let safePosition = max(0.0, min(position, duration - 0.1))
+    
+    let framePos  = AVAudioFramePosition(safePosition * file.processingFormat.sampleRate)
+    let remaining = file.length - framePos
+    guard remaining > 100 else {
+      channel?.invokeMethod("log", arguments: "⚠️ Seek: too close to end")
+      return
+    }
+    
+    seekFrameOffset = framePos
+    lastSeekTime = safePosition
+    let wasPlaying = isPlaying
+    
+    player.stop()
+    player.scheduleSegment(file, startingFrame: framePos,
+      frameCount: AVAudioFrameCount(remaining), at: nil, completionHandler: nil)
+    
+    if wasPlaying { 
+      player.play() 
+    }
+    
+    updateNowPlaying()
+    channel?.invokeMethod("log", arguments: "✅ Seeked to \(safePosition)")
   }
 
   func getDuration() -> Double {
@@ -771,19 +755,15 @@ import Accelerate
   }
 
   func setShuffle(_ enabled: Bool) {
-    do {
-      channel?.invokeMethod("log", arguments: "setShuffle(\(enabled))")
-      shuffleEnabled = enabled
-      if enabled && !playlist.isEmpty {
-        buildShuffleOrder()
-        channel?.invokeMethod("log", arguments: "setShuffle: shuffle enabled, order built")
-      } else if !enabled {
-        shufflePosition = 0
-        shuffledIndices = []
-        channel?.invokeMethod("log", arguments: "setShuffle: shuffle disabled")
-      }
-    } catch {
-      channel?.invokeMethod("log", arguments: "❌ setShuffle error: \(error)")
+    channel?.invokeMethod("log", arguments: "setShuffle(\(enabled))")
+    shuffleEnabled = enabled
+    if enabled && !playlist.isEmpty {
+      buildShuffleOrder()
+      channel?.invokeMethod("log", arguments: "setShuffle: shuffle enabled, order built")
+    } else if !enabled {
+      shufflePosition = 0
+      shuffledIndices = []
+      channel?.invokeMethod("log", arguments: "setShuffle: shuffle disabled")
     }
   }
 
@@ -829,202 +809,178 @@ import Accelerate
   }
 
   private func onTrackFinished() {
-    do {
-      positionTimer?.invalidate()
-      channel?.invokeMethod("log", arguments: "🏁 Track finished")
+    positionTimer?.invalidate()
+    channel?.invokeMethod("log", arguments: "🏁 Track finished")
+    
+    guard !playlist.isEmpty else {
+      channel?.invokeMethod("onTrackFinished", arguments: nil)
+      return
+    }
+
+    isPlaying = false
+
+    if repeatMode == 2 {
+      seek(to: 0)
+      play()
+      return
+    }
+
+    if let next = nextIndex() {
+      currentIndex = next
       
-      guard !playlist.isEmpty else {
-        channel?.invokeMethod("onTrackFinished", arguments: nil)
-        return
-      }
-
-      isPlaying = false
-
-      if repeatMode == 2 {
-        seek(to: 0)
-        play()
-        return
-      }
-
-      if let next = nextIndex() {
-        currentIndex = next
-        
-        // Use crossfade if enabled
-        if crossfadeEnabled {
-          playCrossfade(nextPath: playlist[currentIndex])
-        } else {
-          loadAudio(path: playlist[currentIndex])
-          play()
-        }
-        
-        channel?.invokeMethod("onTrackChanged", arguments: ["index": currentIndex])
+      // Use crossfade if enabled
+      if crossfadeEnabled {
+        playCrossfade(nextPath: playlist[currentIndex])
       } else {
-        channel?.invokeMethod("onTrackFinished", arguments: nil)
+        loadAudio(path: playlist[currentIndex])
+        play()
       }
-    } catch {
-      channel?.invokeMethod("log", arguments: "❌ onTrackFinished error: \(error)")
+      
+      channel?.invokeMethod("onTrackChanged", arguments: ["index": currentIndex])
+    } else {
+      channel?.invokeMethod("onTrackFinished", arguments: nil)
     }
   }
 
   func playNext() {
-    do {
-      channel?.invokeMethod("log", arguments: "playNext() called")
-      guard !playlist.isEmpty else {
-        channel?.invokeMethod("log", arguments: "playNext(): playlist empty")
-        return
-      }
+    channel?.invokeMethod("log", arguments: "playNext() called")
+    guard !playlist.isEmpty else {
+      channel?.invokeMethod("log", arguments: "playNext(): playlist empty")
+      return
+    }
 
-      if let next = nextIndex() {
-        currentIndex = next
-        channel?.invokeMethod("log", arguments: "playNext(): loading track at index \(currentIndex)")
-        
-        // Use crossfade if enabled
-        if crossfadeEnabled {
-          playCrossfade(nextPath: playlist[currentIndex])
-        } else {
-          loadAudio(path: playlist[currentIndex])
-          play()
-        }
-        
-        channel?.invokeMethod("onTrackChanged", arguments: ["index": currentIndex])
+    if let next = nextIndex() {
+      currentIndex = next
+      channel?.invokeMethod("log", arguments: "playNext(): loading track at index \(currentIndex)")
+      
+      // Use crossfade if enabled
+      if crossfadeEnabled {
+        playCrossfade(nextPath: playlist[currentIndex])
       } else {
-        channel?.invokeMethod("log", arguments: "playNext(): no next index")
+        loadAudio(path: playlist[currentIndex])
+        play()
       }
-    } catch {
-      channel?.invokeMethod("log", arguments: "❌ playNext error: \(error)")
+      
+      channel?.invokeMethod("onTrackChanged", arguments: ["index": currentIndex])
+    } else {
+      channel?.invokeMethod("log", arguments: "playNext(): no next index")
     }
   }
 
   func playPrevious() {
-    do {
-      channel?.invokeMethod("log", arguments: "playPrevious() called")
-      guard !playlist.isEmpty else {
-        channel?.invokeMethod("log", arguments: "playPrevious(): playlist empty")
-        return
+    channel?.invokeMethod("log", arguments: "playPrevious() called")
+    guard !playlist.isEmpty else {
+      channel?.invokeMethod("log", arguments: "playPrevious(): playlist empty")
+      return
+    }
+
+    if getPosition() > 3 {
+      channel?.invokeMethod("log", arguments: "playPrevious(): seeking to start")
+      seek(to: 0); return
+    }
+
+    if shuffleEnabled {
+      if shuffledIndices.isEmpty || shuffledIndices.count != playlist.count {
+        buildShuffleOrder()
       }
 
-      if getPosition() > 3 {
-        channel?.invokeMethod("log", arguments: "playPrevious(): seeking to start")
+      if shufflePosition > 0 {
+        shufflePosition -= 1
+        currentIndex = shuffledIndices[shufflePosition]
+        channel?.invokeMethod("log", arguments: "playPrevious(): shuffle prev at \(shufflePosition)")
+      } else {
+        shufflePosition = shuffledIndices.count - 1
+        currentIndex = shuffledIndices[shufflePosition]
+        channel?.invokeMethod("log", arguments: "playPrevious(): shuffle wrap to end")
+      }
+    } else {
+      guard currentIndex > 0 else {
+        channel?.invokeMethod("log", arguments: "playPrevious(): at start, seeking to 0")
         seek(to: 0); return
       }
-
-      if shuffleEnabled {
-        if shuffledIndices.isEmpty || shuffledIndices.count != playlist.count {
-          buildShuffleOrder()
-        }
-
-        if shufflePosition > 0 {
-          shufflePosition -= 1
-          currentIndex = shuffledIndices[shufflePosition]
-          channel?.invokeMethod("log", arguments: "playPrevious(): shuffle prev at \(shufflePosition)")
-        } else {
-          shufflePosition = shuffledIndices.count - 1
-          currentIndex = shuffledIndices[shufflePosition]
-          channel?.invokeMethod("log", arguments: "playPrevious(): shuffle wrap to end")
-        }
-      } else {
-        guard currentIndex > 0 else {
-          channel?.invokeMethod("log", arguments: "playPrevious(): at start, seeking to 0")
-          seek(to: 0); return
-        }
-        currentIndex -= 1
-        channel?.invokeMethod("log", arguments: "playPrevious(): linear prev to \(currentIndex)")
-      }
-
-      loadAudio(path: playlist[currentIndex])
-      play()
-      channel?.invokeMethod("onTrackChanged", arguments: ["index": currentIndex])
-    } catch {
-      channel?.invokeMethod("log", arguments: "❌ playPrevious error: \(error)")
+      currentIndex -= 1
+      channel?.invokeMethod("log", arguments: "playPrevious(): linear prev to \(currentIndex)")
     }
+
+    loadAudio(path: playlist[currentIndex])
+    play()
+    channel?.invokeMethod("onTrackChanged", arguments: ["index": currentIndex])
   }
 
   // MARK: - Effects
 
   func setEffect(effect: String, value: Float) {
-    do {
-      channel?.invokeMethod("log", arguments: "setEffect(\(effect), \(value))")
-      switch effect {
-      case "reverb":    reverb?.wetDryMix = value * 100
-      case "bass":
-        eq?.bands[0].gain = value * 14; eq?.bands[1].gain = value * 11; eq?.bands[2].gain = value * 8
-      case "volume":
-        audioEngine?.mainMixerNode.outputVolume = min(1.0, max(0.0, value))
-      case "delay":     delay?.wetDryMix = value * 50
-      case "warmth":    distortion?.wetDryMix = value * 20
-      case "clarity":
-        eq?.bands[6].gain = value * 8; eq?.bands[7].gain = value * 10; eq?.bands[8].gain = value * 12
-      case "presence":
-        eq?.bands[4].gain = value * 6; eq?.bands[5].gain = value * 8
-      case "pitch":     timePitch?.pitch = value * 400 - 200
-      case "crossfeed": applyCrossfeed(value)
-      case "exciter":   distortion?.wetDryMix = value * 15
-      case "compress":
-        if let au = compressor {
-          AudioUnitSetParameter(au.audioUnit, kDynamicsProcessorParam_Threshold,
-            kAudioUnitScope_Global, 0, Float(-40 + value * 30), 0)
-        }
-      default: 
-        channel?.invokeMethod("log", arguments: "⚠️ Unknown effect: \(effect)")
+    channel?.invokeMethod("log", arguments: "setEffect(\(effect), \(value))")
+    switch effect {
+    case "reverb":    reverb?.wetDryMix = value * 100
+    case "bass":
+      eq?.bands[0].gain = value * 14; eq?.bands[1].gain = value * 11; eq?.bands[2].gain = value * 8
+    case "volume":
+      audioEngine?.mainMixerNode.outputVolume = min(1.0, max(0.0, value))
+    case "delay":     delay?.wetDryMix = value * 50
+    case "warmth":    distortion?.wetDryMix = value * 20
+    case "clarity":
+      eq?.bands[6].gain = value * 8; eq?.bands[7].gain = value * 10; eq?.bands[8].gain = value * 12
+    case "presence":
+      eq?.bands[4].gain = value * 6; eq?.bands[5].gain = value * 8
+    case "pitch":     timePitch?.pitch = value * 400 - 200
+    case "crossfeed": applyCrossfeed(value)
+    case "exciter":   distortion?.wetDryMix = value * 15
+    case "compress":
+      if let au = compressor {
+        AudioUnitSetParameter(au.audioUnit, kDynamicsProcessorParam_Threshold,
+          kAudioUnitScope_Global, 0, Float(-40 + value * 30), 0)
       }
-      channel?.invokeMethod("log", arguments: "✅ Effect \(effect) applied")
-    } catch {
-      channel?.invokeMethod("log", arguments: "❌ setEffect error: \(error)")
+    default: 
+      channel?.invokeMethod("log", arguments: "⚠️ Unknown effect: \(effect)")
     }
+    channel?.invokeMethod("log", arguments: "✅ Effect \(effect) applied")
   }
 
   // MARK: - Route Change
 
   @objc func handleRouteChange(notification: Notification) {
-    do {
-      guard let info = notification.userInfo,
-            let reasonValue = info[AVAudioSessionRouteChangeReasonKey] as? UInt,
-            let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue) else { return }
+    guard let info = notification.userInfo,
+          let reasonValue = info[AVAudioSessionRouteChangeReasonKey] as? UInt,
+          let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue) else { return }
 
-      switch reason {
-      case .newDeviceAvailable:
-        // CRITICAL: Save position BEFORE changing device
-        let savedPos = getPosition()
-        let wasPlaying = isPlaying
-        
-        autoApplyEQForDevice()
-        channel?.invokeMethod("onDeviceChanged", arguments: ["device": getCurrentAudioDevice()])
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-          guard let self = self else { return }
-          self.restartEngineKeepingPosition(savedPosition: savedPos, wasPlaying: wasPlaying)
-        }
-      case .oldDeviceUnavailable:
-        if isPlaying { pause() }
-        applyEQProfile("speaker")
-        channel?.invokeMethod("onDeviceChanged", arguments: ["device": "speaker"])
-      case .categoryChange, .override:
-        let savedPos = getPosition()
-        let wasPlaying = isPlaying
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-          guard let self = self else { return }
-          self.restartEngineKeepingPosition(savedPosition: savedPos, wasPlaying: wasPlaying)
-        }
-      default: break
+    switch reason {
+    case .newDeviceAvailable:
+      // CRITICAL: Save position BEFORE changing device
+      let savedPos = getPosition()
+      let wasPlaying = isPlaying
+      
+      autoApplyEQForDevice()
+      channel?.invokeMethod("onDeviceChanged", arguments: ["device": getCurrentAudioDevice()])
+      
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+        guard let self = self else { return }
+        self.restartEngineKeepingPosition(savedPosition: savedPos, wasPlaying: wasPlaying)
       }
-    } catch {
-      channel?.invokeMethod("log", arguments: "❌ handleRouteChange error: \(error)")
+    case .oldDeviceUnavailable:
+      if isPlaying { pause() }
+      applyEQProfile("speaker")
+      channel?.invokeMethod("onDeviceChanged", arguments: ["device": "speaker"])
+    case .categoryChange, .override:
+      let savedPos = getPosition()
+      let wasPlaying = isPlaying
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+        guard let self = self else { return }
+        self.restartEngineKeepingPosition(savedPosition: savedPos, wasPlaying: wasPlaying)
+      }
+    default: break
     }
   }
 
   @objc func handleInterruption(notification: Notification) {
-    do {
-      guard let info = notification.userInfo,
-            let typeValue = info[AVAudioSessionInterruptionTypeKey] as? UInt,
-            let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
-      if type == .began {
-        if isPlaying { pause() }
-      } else if type == .ended {
-        if let optVal = info[AVAudioSessionInterruptionOptionKey] as? UInt,
-           AVAudioSession.InterruptionOptions(rawValue: optVal).contains(.shouldResume) { play() }
-      }
-    } catch {
-      channel?.invokeMethod("log", arguments: "❌ handleInterruption error: \(error)")
+    guard let info = notification.userInfo,
+          let typeValue = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+          let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
+    if type == .began {
+      if isPlaying { pause() }
+    } else if type == .ended {
+      if let optVal = info[AVAudioSessionInterruptionOptionKey] as? UInt,
+         AVAudioSession.InterruptionOptions(rawValue: optVal).contains(.shouldResume) { play() }
     }
   }
 
