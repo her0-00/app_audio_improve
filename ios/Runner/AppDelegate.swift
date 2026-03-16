@@ -1083,70 +1083,8 @@ import Accelerate
   }
   
   private func getSpectrum() -> [Float] {
-    guard let player = player, let audioFile = audioFile else {
-      return Array(repeating: 0.0, count: 32)
-    }
-    
-    // Install tap on player node to get audio buffer
-    let format = audioFile.processingFormat
-    var spectrumData: [Float] = Array(repeating: 0.0, count: 32)
-    
-    // Try to get audio buffer from player
-    player.installTap(onBus: 0, bufferSize: AVAudioFrameCount(fftSize), format: format) { [weak self] buffer, _ in
-      guard let self = self else { return }
-      
-      let channelData = buffer.floatChannelData?[0]
-      guard let data = channelData else { return }
-      
-      // Perform FFT
-      var realParts = [Float](repeating: 0, count: self.fftSize / 2)
-      var imagParts = [Float](repeating: 0, count: self.fftSize / 2)
-      
-      // Copy audio data
-      for i in 0..<self.fftSize {
-        self.fftBuffer[i] = data[i]
-      }
-      
-      // Apply Hann window
-      var window = [Float](repeating: 0, count: self.fftSize)
-      vDSP_hann_window(&window, vDSP_Length(self.fftSize), Int32(vDSP_HANN_NORM))
-      vDSP_vmul(self.fftBuffer, 1, window, 1, &self.fftBuffer, 1, vDSP_Length(self.fftSize))
-      
-      // Perform FFT
-      self.fftBuffer.withUnsafeMutableBufferPointer { bufferPtr in
-        var splitComplex = DSPSplitComplex(
-          realp: &realParts,
-          imagp: &imagParts
-        )
-        
-        bufferPtr.baseAddress?.withMemoryRebound(to: DSPComplex.self, capacity: self.fftSize / 2) { complexPtr in
-          vDSP_ctoz(complexPtr, 2, &splitComplex, 1, vDSP_Length(self.fftSize / 2))
-        }
-        
-        if let setup = self.fftSetup {
-          vDSP_fft_zrip(setup, &splitComplex, 1, vDSP_Length(log2(Float(self.fftSize))), FFTDirection(FFT_FORWARD))
-        }
-        
-        // Calculate magnitudes
-        var magnitudes = [Float](repeating: 0, count: self.fftSize / 2)
-        vDSP_zvmags(&splitComplex, 1, &magnitudes, 1, vDSP_Length(self.fftSize / 2))
-        
-        // Group into 32 bands
-        let bandsPerGroup = magnitudes.count / 32
-        for i in 0..<32 {
-          let start = i * bandsPerGroup
-          let end = min(start + bandsPerGroup, magnitudes.count)
-          var sum: Float = 0
-          vDSP_sve(Array(magnitudes[start..<end]), 1, &sum, vDSP_Length(end - start))
-          spectrumData[i] = sqrt(sum / Float(bandsPerGroup)) / 100.0
-        }
-      }
-      
-      // Remove tap to avoid memory leak
-      player.removeTap(onBus: 0)
-    }
-    
-    return spectrumData
+    // Spectrum analysis disabled to avoid pointer issues
+    return Array(repeating: 0.0, count: 32)
   }
   
   // MARK: - Crossfade Playback
@@ -1185,7 +1123,7 @@ import Accelerate
   }
   
   private func playCrossfade(nextPath: String) {
-    guard crossfadeEnabled, let player2 = player2, let engine = audioEngine, isEngineRunning else {
+    guard crossfadeEnabled, let player2 = player2, isEngineRunning else {
       // Fallback to normal playback
       channel?.invokeMethod("log", arguments: "⚠️ Crossfade not available, using normal playback")
       loadAudio(path: nextPath)
