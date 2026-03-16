@@ -563,14 +563,14 @@ import Accelerate
   // MARK: - Playback
 
   func loadAudio(path: String) {
+    guard FileManager.default.fileExists(atPath: path) else {
+      channel?.invokeMethod("log", arguments: "⚠️ File not found: \(path)")
+      return
+    }
+
+    if audioEngine == nil { setupAudioEngine() }
+
     do {
-      guard FileManager.default.fileExists(atPath: path) else {
-        channel?.invokeMethod("log", arguments: "⚠️ File not found: \(path)")
-        return
-      }
-
-      if audioEngine == nil { setupAudioEngine() }
-
       audioFile = try AVAudioFile(forReading: URL(fileURLWithPath: path))
       seekFrameOffset = 0
       lastSeekTime = 0
@@ -732,7 +732,7 @@ import Accelerate
   }
 
   func getPosition() -> Double {
-    guard let player = player, let file = audioFile else { return lastSeekTime }
+    guard let player = player, let _ = audioFile else { return lastSeekTime }
     if let nodeTime = player.lastRenderTime,
        let playerTime = player.playerTime(forNodeTime: nodeTime) {
       return min(lastSeekTime + Double(playerTime.sampleTime) / playerTime.sampleRate, getDuration())
