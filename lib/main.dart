@@ -88,6 +88,18 @@ class AudioState extends ChangeNotifier {
     return '${hours}h ${minutes}min';
   }
   
+  // NOUVEAU: Historique d'écoute
+  List<Map<String, dynamic>> _listeningHistory = [];
+  List<Map<String, dynamic>> get listeningHistory => _listeningHistory;
+  
+  // NOUVEAU: Favoris YouTube
+  List<Map<String, String>> _youtubeFavorites = [];
+  List<Map<String, String>> get youtubeFavorites => _youtubeFavorites;
+  
+  // NOUVEAU: Suggestions IA
+  List<String> _suggestedQueries = [];
+  List<String> get suggestedQueries => _suggestedQueries;
+  
   // Smart playlists
   List<AudioTrack> get energeticTracks => queue.where((t) => _getEstimatedBPM(t.title) > 120).toList();
   List<AudioTrack> get chillTracks => queue.where((t) => _getEstimatedBPM(t.title) < 100).toList();
@@ -125,6 +137,23 @@ class AudioState extends ChangeNotifier {
       // Load stats
       _totalPlayTime = prefs.getInt('totalPlayTime') ?? 0;
       _tracksPlayed = prefs.getInt('tracksPlayed') ?? 0;
+      
+      // NOUVEAU: Load historique
+      final historyJson = prefs.getString('listeningHistory');
+      if (historyJson != null) {
+        final decoded = jsonDecode(historyJson) as List;
+        _listeningHistory = decoded.cast<Map<String, dynamic>>();
+      }
+      
+      // NOUVEAU: Load favoris
+      final favoritesJson = prefs.getString('youtubeFavorites');
+      if (favoritesJson != null) {
+        final decoded = jsonDecode(favoritesJson) as List;
+        _youtubeFavorites = decoded.map((e) => Map<String, String>.from(e as Map)).toList();
+      }
+      
+      // NOUVEAU: Générer suggestions IA
+      _generateAISuggestions();
     } catch (e) {
       debugPrint('Error loading audio settings: $e');
     }
@@ -140,6 +169,12 @@ class AudioState extends ChangeNotifier {
       // Save stats
       await prefs.setInt('totalPlayTime', _totalPlayTime);
       await prefs.setInt('tracksPlayed', _tracksPlayed);
+      
+      // NOUVEAU: Save historique
+      await prefs.setString('listeningHistory', jsonEncode(_listeningHistory));
+      
+      // NOUVEAU: Save favoris
+      await prefs.setString('youtubeFavorites', jsonEncode(_youtubeFavorites));
     } catch (e) {
       debugPrint('Error saving audio settings: $e');
     }
@@ -280,6 +315,10 @@ class AudioState extends ChangeNotifier {
             if (newIndex != null && newIndex >= 0 && newIndex < queue.length) {
               _library.jumpTo(newIndex);
               _tracksPlayed++;
+              
+              // NOUVEAU: Ajouter à l'historique
+              _addToHistory(queue[newIndex].title, 'local');
+              
               _saveAudioSettings();
               AppLogger.log('✅ Track changed to index $newIndex');
               
@@ -976,6 +1015,94 @@ class AudioState extends ChangeNotifier {
     _spectrumTimer?.cancel();
     _spectrumTimer = null;
     super.dispose();
+  }
+  
+  // NOUVEAU: Ajouter à l'historique
+  void _addToHistory(String title, String source) {
+    final entry = {
+      'title': title,
+      'source': source,
+      'timestamp': DateTime.now().toIso8601String(),
+      'preset': currentPreset,
+    };
+    _listeningHistory.insert(0, entry);
+    if (_listeningHistory.length > 100) {
+      _listeningHistory.removeLast();
+    }
+    _saveAudioSettings();
+  }
+  
+  // NOUVEAU: Ajouter aux favoris YouTube
+  Future<void> addYouTubeFavorite(String videoId, String title) async {
+    if (_youtubeFavorites.any((f) => f['videoId'] == videoId)) {
+      return; // Déjà dans les favoris
+    }
+    _youtubeFavorites.insert(0, {'videoId': videoId, 'title': title});
+    await _saveAudioSettings();
+    notifyListeners();
+  }
+  
+  // NOUVEAU: Retirer des favoris
+  Future<void> removeYouTubeFavorite(String videoId) async {
+    _youtubeFavorites.removeWhere((f) => f['videoId'] == videoId);
+    await _saveAudioSettings();
+    notifyListeners();
+  }
+  
+  // NOUVEAU: Vérifier si favori
+  bool isYouTubeFavorite(String videoId) {
+    return _youtubeFavorites.any((f) => f['videoId'] == videoId);
+  }
+  
+  // NOUVEAU: Générer suggestions IA
+  void _generateAISuggestions() {
+    _suggestedQueries.clear();
+    
+    // Analyser l'historique pour détecter les préférences
+    final recentTitles = _listeningHistory.take(20).map((e) => e['title'].toString().toLowerCase()).toList();
+    
+    // Détecter genres
+    final hasLofi = recentTitles.any((t) => t.contains('lofi') || t.contains('chill'));
+    final hasTrap = recentTitles.any((t) => t.contains('trap') || t.contains('hip hop'));
+    final hasJazz = recentTitles.any((t) => t.contains('jazz') || t.contains('blues'));
+    final hasClassical = recentTitles.any((t) => t.contains('classical') || t.contains('piano'));
+    
+    // Générer suggestions
+    if (hasLofi) {
+      _suggestedQueries.addAll(['lofi study beats', 'chill hop mix', 'lofi sleep music']);
+    }
+    if (hasTrap) {
+      _suggestedQueries.addAll(['trap beats 2024', 'hard trap mix', 'trap workout music']);
+    }
+    if (hasJazz) {
+      _suggestedQueries.addAll(['smooth jazz', 'jazz piano', 'jazz cafe music']);
+    }
+    if (hasClassical) {
+      _suggestedQueries.addAll(['classical piano', 'mozart', 'beethoven symphony']);
+    }
+    
+    // Suggestions par défaut si pas d'historique
+    if (_suggestedQueries.isEmpty) {
+      _suggestedQueries.addAll([
+        'lofi hip hop',
+        'trap beats',
+        'chill music',
+        'study music',
+        'workout music',
+        'jazz piano',
+      ]);
+    }
+  }
+  
+  // NOUVEAU: Radio personnalisée (lance une recherche basée sur l'historique)
+  Future<void> startPersonalRadio() async {
+    _generateAISuggestions();
+    if (_suggestedQueries.isNotEmpty) {
+      // Prendre une suggestion aléatoire
+      final query = (_suggestedQueries..shuffle()).first;
+      AppLogger.log('📻 Starting personal radio with: $query');
+      // La recherche sera lancée depuis l'écran YouTube
+    }
   }
 }
 
@@ -2459,6 +2586,17 @@ class StatsScreen extends StatelessWidget {
         backgroundColor: Colors.transparent,
         title: const Text('STATISTIQUES',
             style: TextStyle(letterSpacing: 3, fontSize: 14, color: _gold)),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.history, color: _gold),
+            tooltip: 'Voir l\'historique complet',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const HistoryScreen()),
+              );
+            },
+          ),
+        ],
       ),
       body: ListenableBuilder(
         listenable: _audio,
@@ -2527,6 +2665,13 @@ class StatsScreen extends StatelessWidget {
                   title: 'PISTES BASS',
                   value: '${_audio.bassTracks.length}',
                   color: Colors.red,
+                ),
+                const SizedBox(height: 16),
+                _StatCard(
+                  icon: Icons.history,
+                  title: 'HISTORIQUE',
+                  value: '${_audio.listeningHistory.length} pistes',
+                  color: Colors.amber,
                 ),
                 const SizedBox(height: 32),
                 
@@ -2663,6 +2808,133 @@ class _InfoRow extends StatelessWidget {
   }
 }
 
+// ─── Écran Historique ───────────────────────────────────────────────────────
+class HistoryScreen extends StatelessWidget {
+  const HistoryScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: _dark,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        title: const Text('HISTORIQUE D\'ÉCOUTE',
+            style: TextStyle(letterSpacing: 3, fontSize: 14, color: _gold)),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.delete_sweep, color: Colors.red),
+            tooltip: 'Effacer l\'historique',
+            onPressed: () async {
+              final confirm = await showDialog<bool>(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: const Text('Effacer l\'historique?'),
+                  content: const Text('Cette action est irréversible.'),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: const Text('ANNULER'),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      child: const Text('EFFACER', style: TextStyle(color: Colors.red)),
+                    ),
+                  ],
+                ),
+              );
+              if (confirm == true) {
+                _audio._listeningHistory.clear();
+                await _audio._saveAudioSettings();
+                if (context.mounted) {
+                  Navigator.pop(context);
+                }
+              }
+            },
+          ),
+        ],
+      ),
+      body: ListenableBuilder(
+        listenable: _audio,
+        builder: (_, __) {
+          if (_audio.listeningHistory.isEmpty) {
+            return const Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.history, size: 80, color: Colors.white24),
+                  SizedBox(height: 16),
+                  Text(
+                    'Aucun historique\nÉcoutez de la musique pour commencer',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.white38, fontSize: 14),
+                  ),
+                ],
+              ),
+            );
+          }
+          return ListView.builder(
+            padding: const EdgeInsets.all(16),
+            itemCount: _audio.listeningHistory.length,
+            itemBuilder: (_, i) {
+              final entry = _audio.listeningHistory[i];
+              final title = entry['title'] as String;
+              final source = entry['source'] as String;
+              final timestamp = DateTime.parse(entry['timestamp'] as String);
+              final preset = entry['preset'] as String;
+              
+              final timeAgo = _formatTimeAgo(timestamp);
+              
+              return Card(
+                color: const Color(0xFF1A1A1A),
+                margin: const EdgeInsets.only(bottom: 12),
+                child: ListTile(
+                  leading: Icon(
+                    source == 'youtube' ? Icons.play_circle : Icons.music_note,
+                    color: _gold,
+                    size: 32,
+                  ),
+                  title: Text(
+                    title,
+                    style: const TextStyle(color: Colors.white, fontSize: 14),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 4),
+                      Text(
+                        '$timeAgo • Preset: $preset',
+                        style: const TextStyle(color: Colors.white38, fontSize: 11),
+                      ),
+                    ],
+                  ),
+                  trailing: Icon(
+                    source == 'youtube' ? Icons.cloud : Icons.phone_iphone,
+                    color: Colors.white38,
+                    size: 20,
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+  
+  String _formatTimeAgo(DateTime timestamp) {
+    final now = DateTime.now();
+    final diff = now.difference(timestamp);
+    
+    if (diff.inMinutes < 1) return 'À l\'instant';
+    if (diff.inMinutes < 60) return 'Il y a ${diff.inMinutes} min';
+    if (diff.inHours < 24) return 'Il y a ${diff.inHours}h';
+    if (diff.inDays < 7) return 'Il y a ${diff.inDays}j';
+    return '${timestamp.day}/${timestamp.month}/${timestamp.year}';
+  }
+}
+
 // ─── Écran 6 : YouTube ───────────────────────────────────────────────────────
 class YouTubeScreen extends StatefulWidget {
   const YouTubeScreen({super.key});
@@ -2676,6 +2948,7 @@ class _YouTubeScreenState extends State<YouTubeScreen> {
   List<Map<String, String>> _results = [];
   bool _isSearching = false;
   String? _streamingVideoId;
+  int _selectedTab = 0; // 0 = Recherche, 1 = Favoris, 2 = Suggestions
 
   @override
   void dispose() {
@@ -2744,6 +3017,9 @@ class _YouTubeScreenState extends State<YouTubeScreen> {
       // Load and play the stream
       await _ch.invokeMethod('loadAudio', {'path': streamUrl});
       await _ch.invokeMethod('play');
+      
+      // NOUVEAU: Ajouter à l'historique
+      _audio._addToHistory(title, 'youtube');
 
       AppLogger.log('✅ YouTube streaming started');
       
@@ -2779,123 +3055,238 @@ class _YouTubeScreenState extends State<YouTubeScreen> {
         backgroundColor: Colors.transparent,
         title: const Text('YOUTUBE STREAMING',
             style: TextStyle(letterSpacing: 3, fontSize: 14, color: _gold)),
+        bottom: TabBar(
+          controller: TabController(length: 3, vsync: Navigator.of(context)),
+          tabs: const [
+            Tab(icon: Icon(Icons.search), text: 'RECHERCHE'),
+            Tab(icon: Icon(Icons.favorite), text: 'FAVORIS'),
+            Tab(icon: Icon(Icons.auto_awesome), text: 'POUR VOUS'),
+          ],
+          labelColor: _gold,
+          unselectedLabelColor: Colors.white54,
+          indicatorColor: _gold,
+          onTap: (index) => setState(() => _selectedTab = index),
+        ),
       ),
-      body: Column(
-        children: [
-          // Search bar
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _searchController,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      hintText: 'Rechercher sur YouTube...',
-                      hintStyle: const TextStyle(color: Colors.white38),
-                      filled: true,
-                      fillColor: const Color(0xFF1A1A1A),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide.none,
-                      ),
-                      prefixIcon: const Icon(Icons.search, color: _gold),
+      body: _selectedTab == 0
+          ? _buildSearchTab()
+          : _selectedTab == 1
+              ? _buildFavoritesTab()
+              : _buildSuggestionsTab(),
+    );
+  }
+  
+  Widget _buildSearchTab() {
+    return Column(
+      children: [
+        // Search bar
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _searchController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    hintText: 'Rechercher sur YouTube...',
+                    hintStyle: const TextStyle(color: Colors.white38),
+                    filled: true,
+                    fillColor: const Color(0xFF1A1A1A),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide.none,
                     ),
-                    onSubmitted: _search,
+                    prefixIcon: const Icon(Icons.search, color: _gold),
                   ),
+                  onSubmitted: _search,
                 ),
-                const SizedBox(width: 8),
-                IconButton(
-                  icon: const Icon(Icons.search, color: _gold, size: 32),
-                  onPressed: () => _search(_searchController.text),
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                icon: const Icon(Icons.search, color: _gold, size: 32),
+                onPressed: () => _search(_searchController.text),
+              ),
+            ],
+          ),
+        ),
+        
+        // Results
+        Expanded(
+          child: _isSearching
+              ? const Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      CircularProgressIndicator(color: _gold),
+                      SizedBox(height: 16),
+                      Text('Recherche en cours...',
+                          style: TextStyle(color: Colors.white54)),
+                    ],
+                  ),
+                )
+              : _results.isEmpty
+                  ? const Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.play_circle_outline, size: 80, color: Colors.white24),
+                          SizedBox(height: 16),
+                          Text(
+                            'Recherchez de la musique\nsur YouTube',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Colors.white38, fontSize: 14),
+                          ),
+                        ],
+                      ),
+                    )
+                  : _buildResultsList(_results),
+        ),
+      ],
+    );
+  }
+  
+  Widget _buildFavoritesTab() {
+    return ListenableBuilder(
+      listenable: _audio,
+      builder: (_, __) {
+        if (_audio.youtubeFavorites.isEmpty) {
+          return const Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.favorite_border, size: 80, color: Colors.white24),
+                SizedBox(height: 16),
+                Text(
+                  'Aucun favori\nAppuyez sur ❤️ pour ajouter',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white38, fontSize: 14),
                 ),
               ],
             ),
-          ),
-          
-          // Results
-          Expanded(
-            child: _isSearching
+          );
+        }
+        return _buildResultsList(_audio.youtubeFavorites);
+      },
+    );
+  }
+  
+  Widget _buildSuggestionsTab() {
+    return ListenableBuilder(
+      listenable: _audio,
+      builder: (_, __) {
+        if (_audio.suggestedQueries.isEmpty) {
+          return const Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.auto_awesome, size: 80, color: Colors.white24),
+                SizedBox(height: 16),
+                Text(
+                  'Écoutez de la musique\npour obtenir des suggestions',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white38, fontSize: 14),
+                ),
+              ],
+            ),
+          );
+        }
+        return ListView.builder(
+          padding: const EdgeInsets.all(16),
+          itemCount: _audio.suggestedQueries.length,
+          itemBuilder: (_, i) {
+            final query = _audio.suggestedQueries[i];
+            return Card(
+              color: const Color(0xFF1A1A1A),
+              margin: const EdgeInsets.only(bottom: 12),
+              child: ListTile(
+                leading: const Icon(Icons.auto_awesome, color: _gold),
+                title: Text(
+                  query,
+                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                ),
+                subtitle: const Text(
+                  'Suggestion basée sur votre écoute',
+                  style: TextStyle(color: Colors.white38, fontSize: 11),
+                ),
+                trailing: const Icon(Icons.arrow_forward, color: _gold),
+                onTap: () {
+                  _searchController.text = query;
+                  _search(query);
+                  setState(() => _selectedTab = 0);
+                },
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+  
+  Widget _buildResultsList(List<Map<String, String>> items) {
+    return ListView.builder(
+      padding: const EdgeInsets.only(bottom: 80),
+      itemCount: items.length,
+      itemBuilder: (_, i) {
+        final result = items[i];
+        final videoId = result['videoId'] ?? '';
+        final title = result['title'] ?? 'Unknown';
+        final isStreaming = _streamingVideoId == videoId;
+        final isFavorite = _audio.isYouTubeFavorite(videoId);
+
+        return ListTile(
+          leading: Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A1A1A),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: isStreaming
                 ? const Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        CircularProgressIndicator(color: _gold),
-                        SizedBox(height: 16),
-                        Text('Recherche en cours...',
-                            style: TextStyle(color: Colors.white54)),
-                      ],
+                    child: SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(
+                        color: _gold,
+                        strokeWidth: 2,
+                      ),
                     ),
                   )
-                : _results.isEmpty
-                    ? const Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.play_circle_outline, size: 80, color: Colors.white24),
-                            SizedBox(height: 16),
-                            Text(
-                              'Recherchez de la musique\nsur YouTube',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(color: Colors.white38, fontSize: 14),
-                            ),
-                          ],
-                        ),
-                      )
-                    : ListView.builder(
-                        padding: const EdgeInsets.only(bottom: 80),
-                        itemCount: _results.length,
-                        itemBuilder: (_, i) {
-                          final result = _results[i];
-                          final videoId = result['videoId'] ?? '';
-                          final title = result['title'] ?? 'Unknown';
-                          final isStreaming = _streamingVideoId == videoId;
-
-                          return ListTile(
-                            leading: Container(
-                              width: 48,
-                              height: 48,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF1A1A1A),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: isStreaming
-                                  ? const Center(
-                                      child: SizedBox(
-                                        width: 24,
-                                        height: 24,
-                                        child: CircularProgressIndicator(
-                                          color: _gold,
-                                          strokeWidth: 2,
-                                        ),
-                                      ),
-                                    )
-                                  : const Icon(Icons.play_circle, color: _gold, size: 32),
-                            ),
-                            title: Text(
-                              title,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 14,
-                              ),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            subtitle: Text(
-                              videoId,
-                              style: const TextStyle(
-                                color: Colors.white38,
-                                fontSize: 11,
-                              ),
-                            ),
-                            onTap: isStreaming ? null : () => _streamVideo(videoId, title),
-                          );
-                        },
-                      ),
+                : const Icon(Icons.play_circle, color: _gold, size: 32),
           ),
-        ],
-      ),
+          title: Text(
+            title,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 14,
+            ),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          subtitle: Text(
+            videoId,
+            style: const TextStyle(
+              color: Colors.white38,
+              fontSize: 11,
+            ),
+          ),
+          trailing: IconButton(
+            icon: Icon(
+              isFavorite ? Icons.favorite : Icons.favorite_border,
+              color: isFavorite ? Colors.red : Colors.white54,
+            ),
+            onPressed: () {
+              if (isFavorite) {
+                _audio.removeYouTubeFavorite(videoId);
+              } else {
+                _audio.addYouTubeFavorite(videoId, title);
+              }
+            },
+          ),
+          onTap: isStreaming ? null : () => _streamVideo(videoId, title),
+        );
+      },
     );
   }
 }
